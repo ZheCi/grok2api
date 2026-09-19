@@ -17,7 +17,32 @@ type AuditRepository interface {
 	Summarize(ctx context.Context, query AuditSummaryQuery) (audit.Summary, error)
 	SumTokensByAccountsSince(ctx context.Context, accountIDs []uint64, since time.Time) (map[uint64]int64, error)
 	SummarizeDegrade(ctx context.Context, query DegradeSummaryQuery) (DegradeSummaryResult, error)
+	ListRecentByAccounts(ctx context.Context, query AccountCallStatusQuery) ([]audit.Record, error)
+	ListByAccountSince(ctx context.Context, query AccountCallHistoryQuery) ([]audit.Record, error)
+	ListRecentSince(ctx context.Context, query AuditHistoryQuery) ([]audit.Record, error)
 	PurgeOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+type AccountCallStatusQuery struct {
+	AccountIDs    []uint64
+	Limit         int
+	IncludeProbes bool
+}
+
+type AccountCallHistoryQuery struct {
+	AccountID     uint64
+	Start         time.Time
+	End           time.Time
+	Limit         int
+	IncludeProbes bool
+}
+
+type AuditHistoryQuery struct {
+	Start  time.Time
+	End    time.Time
+	Limit  int
+	Search string
+	Filter AuditListFilter
 }
 
 type DegradeSummaryQuery struct {

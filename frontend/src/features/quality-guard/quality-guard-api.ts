@@ -1,5 +1,6 @@
 import { apiRequest } from "@/shared/api/client";
 import { createObjectDecoder, hasShape, isArrayOf, isBoolean, isNumber, isObject, isOneOf, isOptional, isRecordOf, isString } from "@/shared/api/decoder";
+import type { CallStatusThresholdInput } from "@/shared/components/account-call-status/account-call-status-api";
 import { qualityGuardStatusPath } from "./quality-guard-query";
 
 export type QualityGuardPolicy = {
@@ -190,6 +191,17 @@ const decodeQualityTest = createObjectDecoder<QualityTestResult>("quality test",
 
 export function getQualityGuardStatus(nodeIds?: string[]): Promise<QualityGuardStatus> {
   return apiRequest(qualityGuardStatusPath(nodeIds), {}, decodeStatus);
+}
+
+export function qualityGuardCallStatusThresholds(status?: QualityGuardStatus): CallStatusThresholdInput | undefined {
+  const config = status?.config;
+  if (!config) return undefined;
+  return {
+    softTPS: config.soft_tps,
+    hardTPS: config.hard_tps,
+    failClosed: config.fail_closed,
+    minGenMs: config.min_generation_ms,
+  };
 }
 
 export function runQualityTest(nodeId: string, status: QualityGuardStatus, profileId?: string): Promise<QualityTestResult> {

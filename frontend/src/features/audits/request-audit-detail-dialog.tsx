@@ -54,7 +54,7 @@ export function RequestAuditDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[min(700px,calc(100svh-2rem))] max-h-[calc(100svh-2rem)] min-h-0 flex-col gap-0 overflow-hidden p-0 text-xs sm:max-w-[900px]">
+      <DialogContent overlayClassName="z-[60]" className="z-[60] flex h-[min(700px,calc(100svh-2rem))] max-h-[calc(100svh-2rem)] min-h-0 flex-col gap-0 overflow-hidden p-0 text-xs sm:max-w-[900px]">
         <DialogHeader className="shrink-0 px-5 pb-3 pt-4 pr-12">
           <div className="flex items-center gap-2">
             <DialogTitle>{t("audits.detailTitle")}</DialogTitle>

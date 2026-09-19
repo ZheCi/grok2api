@@ -656,4 +656,100 @@ func TestAuditRepositoryPurgeOlderThanBatchesAuditsAndAttempts(t *testing.T) {
 	}
 }
 
+func TestAuditRepositoryListRecentByAccounts(t *testing.T) {
+	ctx := context.Background()
+	database, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "audit-call-status.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewAuditRepository(database)
+	now := time.Now().UTC()
+	accountA := uint64(11)
+	accountB := uint64(12)
+	values := []audit.Record{
+		{RequestID: "a-old", ClientKeyID: 1, ModelRouteID: 1, AccountID: &accountA, StatusCode: 200, CreatedAt: now.Add(-3 * time.Hour)},
+		{RequestID: "a-mid", ClientKeyID: 1, ModelRouteID: 1, AccountID: &accountA, StatusCode: 200, CreatedAt: now.Add(-2 * time.Hour)},
+		{RequestID: "a-new", ClientKeyID: 1, ModelRouteID: 1, AccountID: &accountA, StatusCode: 500, CreatedAt: now.Add(-time.Hour)},
+		{RequestID: "quality_probe", ClientKeyID: 1, ModelRouteID: 1, AccountID: &accountA, StatusCode: 200, CreatedAt: now.Add(-30 * time.Minute)},
+		{RequestID: "b-only", ClientKeyID: 1, ModelRouteID: 1, AccountID: &accountB, StatusCode: 200, CreatedAt: now.Add(-time.Hour)},
+	}
+	if err := repository.CreateBatch(ctx, values); err != nil {
+		t.Fatal(err)
+	}
+
+	recent, err := repository.ListRecentByAccounts(ctx, repositorypkg.AccountCallStatusQuery{AccountIDs: []uint64{accountA, accountB, 99}, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 3 {
+		t.Fatalf("recent = %#v", recentIDs(recent))
+	}
+	if recent[0].RequestID != "a-new" || recent[1].RequestID != "a-mid" || recent[2].RequestID != "b-only" {
+		t.Fatalf("recent order = %v", recentIDs(recent))
+	}
+
+	withProbes, err := repository.ListRecentByAccounts(ctx, repositorypkg.AccountCallStatusQuery{AccountIDs: []uint64{accountA}, Limit: 8, IncludeProbes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withProbes) != 4 || withProbes[0].RequestID != "quality_probe" {
+		t.Fatalf("with probes = %v", recentIDs(withProbes))
+	}
+
+	history, err := repository.ListByAccountSince(ctx, repositorypkg.AccountCallHistoryQuery{
+		AccountID: accountA, Start: now.Add(-150 * time.Minute), End: now, Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 || history[0].RequestID != "a-new" || history[1].RequestID != "a-mid" {
+		t.Fatalf("history = %v", recentIDs(history))
+	}
+
+	recentSince, err := repository.ListRecentSince(ctx, repositorypkg.AuditHistoryQuery{
+		Start: now.Add(-150 * time.Minute), End: now, Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recentSince) != 4 || recentSince[0].RequestID != "quality_probe" || recentSince[1].RequestID != "b-only" || recentSince[2].RequestID != "a-new" || recentSince[3].RequestID != "a-mid" {
+		t.Fatalf("recent since = %v", recentIDs(recentSince))
+	}
+
+	failedOnly, err := repository.ListRecentSince(ctx, repositorypkg.AuditHistoryQuery{
+		Start: now.Add(-4 * time.Hour), End: now, Limit: 10, Filter: repositorypkg.AuditListFilter{Status: "5xx"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(failedOnly) != 1 || failedOnly[0].RequestID != "a-new" {
+		t.Fatalf("failed only = %v", recentIDs(failedOnly))
+	}
+
+	previousCap := auditHistoryAbsoluteCap
+	auditHistoryAbsoluteCap = 2
+	t.Cleanup(func() { auditHistoryAbsoluteCap = previousCap })
+	capped, err := repository.ListRecentSince(ctx, repositorypkg.AuditHistoryQuery{
+		Start: now.Add(-4 * time.Hour), End: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capped) != 2 || capped[0].RequestID != "quality_probe" || capped[1].RequestID != "b-only" {
+		t.Fatalf("absolute cap = %v", recentIDs(capped))
+	}
+}
+
+func recentIDs(values []audit.Record) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, value.RequestID)
+	}
+	return out
+}
+
 func uint64Pointer(value uint64) *uint64 { return &value }

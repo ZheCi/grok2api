@@ -12,6 +12,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { updateAccountsEnabled } from "@/features/accounts/accounts-api";
 import { getDegradeAccounts, type DegradeAccountDTO, type DegradeClass, type DegradeSummaryDTO, type DegradeWindow } from "@/features/quality-guard/quality-guard-api";
+import { AccountCallStatusDialog } from "@/shared/components/account-call-status/account-call-status-dialog";
+import { AccountCallStatusSparkline } from "@/shared/components/account-call-status/account-call-status-sparkline";
+import { getAccountCallStatus, uniqueAccountIds } from "@/shared/components/account-call-status/account-call-status-api";
 import { EmptyState, ErrorState } from "@/shared/components/data-state";
 import { Pagination } from "@/shared/components/pagination";
 import { useDebouncedValue } from "@/shared/hooks/use-debounced-value";
@@ -32,6 +35,7 @@ export function DegradeAccountsPanel({ softTPS, hardTPS, failClosed, minGenMs }:
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [callStatusAccount, setCallStatusAccount] = useState<{ id: string; label: string } | null>(null);
 
   const query = useQuery({
     queryKey: ["quality-guard-degrade-accounts", period, softTPS, hardTPS, failClosed, minGenMs, debouncedSearch, status, cls, hitsMin, page, pageSize],
@@ -45,6 +49,17 @@ export function DegradeAccountsPanel({ softTPS, hardTPS, failClosed, minGenMs }:
 
   const data = query.data;
   const rows = useMemo(() => data?.accounts ?? [], [data?.accounts]);
+  const accountIds = useMemo(() => uniqueAccountIds(rows.map((account) => account.id)), [rows]);
+  const callStatusQuery = useQuery({
+    queryKey: ["account-call-status", accountIds.join(","), softTPS, hardTPS, failClosed, minGenMs],
+    queryFn: ({ signal }) => getAccountCallStatus({
+      accountIds,
+      thresholds: { softTPS, hardTPS, failClosed, minGenMs },
+    }, signal),
+    enabled: accountIds.length > 0,
+    staleTime: 15_000,
+  });
+  const callStatusByAccount = callStatusQuery.data?.accounts;
   const selectable = useMemo(() => rows.filter((account) => account.found && account.enabled), [rows]);
   const selectedRows = selectable.filter((account) => selected.has(account.id));
   const allSelected = selectable.length > 0 && selectedRows.length === selectable.length;
@@ -115,13 +130,13 @@ export function DegradeAccountsPanel({ softTPS, hardTPS, failClosed, minGenMs }:
             }}>
               <PowerOff />{selectedRows.length ? t("qualityGuard.degrade.muteSelectedCount", { count: selectedRows.length }) : t("qualityGuard.degrade.muteSelected")}
             </Button>
-            <Button type="button" variant="ghost" size="icon" className="size-8" onClick={() => void query.refetch()} disabled={query.isFetching} aria-label={t("common.refresh")}>
-              <RefreshCw className={cn("size-4", query.isFetching && "animate-spin")} />
+            <Button type="button" variant="ghost" size="icon" className="size-8" onClick={() => { void query.refetch(); void callStatusQuery.refetch(); }} disabled={query.isFetching || callStatusQuery.isFetching} aria-label={t("common.refresh")}>
+              <RefreshCw className={cn("size-4", (query.isFetching || callStatusQuery.isFetching) && "animate-spin")} />
             </Button>
           </div>
         </div>
         <div className="overflow-x-auto">
-          <Table className="min-w-[920px]">
+          <Table className="min-w-[1020px]">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-10 px-3"><Checkbox checked={allSelected ? true : selectedRows.length > 0 ? "indeterminate" : false} disabled={selectable.length === 0} onCheckedChange={(checked) => toggleAll(checked === true)} aria-label={t("common.selectPage")} /></TableHead>
@@ -131,12 +146,13 @@ export function DegradeAccountsPanel({ softTPS, hardTPS, failClosed, minGenMs }:
                 <TableHead className="text-right">{t("qualityGuard.outputTPS")}</TableHead>
                 <TableHead>{t("qualityGuard.degrade.class")}</TableHead>
                 <TableHead>{t("qualityGuard.node")}</TableHead>
+                <TableHead className="w-24">{t("audits.callStatus")}</TableHead>
                 <TableHead>{t("qualityGuard.lastObserved")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {rows.length === 0 ? (
-                <TableRow><TableCell colSpan={8}><EmptyState message={t("qualityGuard.degrade.noAccounts")} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={9}><EmptyState message={t("qualityGuard.degrade.noAccounts")} /></TableCell></TableRow>
               ) : rows.map((account) => {
                 const canMute = account.found && account.enabled;
                 return (
@@ -177,6 +193,12 @@ export function DegradeAccountsPanel({ softTPS, hardTPS, failClosed, minGenMs }:
                     <TableCell className={cn("text-right font-mono tabular-nums", account.maxTPS >= data.thresholds.hardTPS ? "text-destructive" : account.maxTPS >= data.thresholds.softTPS ? "text-amber-600 dark:text-amber-400" : "")}>{account.maxTPS}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{classSummary(account.classes)}</TableCell>
                     <TableCell className="text-xs">{account.nodes.join(" · ") || "-"}</TableCell>
+                    <TableCell className="px-2" onClick={(event) => event.stopPropagation()}>
+                      <AccountCallStatusSparkline
+                        status={callStatusByAccount?.[account.id]}
+                        onOpen={() => setCallStatusAccount({ id: account.id, label: account.email || account.name || `#${account.id}` })}
+                      />
+                    </TableCell>
                     <TableCell className="font-mono text-xs">{account.last ? formatCompactDateTime(account.last, i18n.language) : "-"}</TableCell>
                   </TableRow>
                 );
@@ -213,6 +235,14 @@ export function DegradeAccountsPanel({ softTPS, hardTPS, failClosed, minGenMs }:
           ))}
         </div>
       </section>
+      <AccountCallStatusDialog
+        key={callStatusAccount?.id ?? "closed"}
+        accountId={callStatusAccount?.id}
+        accountLabel={callStatusAccount?.label}
+        open={callStatusAccount !== null}
+        onOpenChange={(open) => { if (!open) setCallStatusAccount(null); }}
+        thresholds={{ softTPS, hardTPS, failClosed, minGenMs }}
+      />
     </div>
   );
 }

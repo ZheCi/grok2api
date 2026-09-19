@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -29,7 +30,10 @@ func NewQualityGuardHandler(service *auditapp.Service, clientKeyID uint64) *Hand
 func (h *Handler) Register(router *gin.RouterGroup) {
 	router.GET("/request-audits", h.list)
 	router.GET("/request-audits/summary", h.summary)
+	router.GET("/request-audits/call-status", h.requestCallStatus)
 	router.GET("/request-audits/degrade-accounts", h.degradeAccounts)
+	router.GET("/request-audits/account-call-status", h.accountCallStatus)
+	router.GET("/request-audits/accounts/:accountId/call-status", h.accountCallStatusDetail)
 	router.GET("/request-audits/:id", h.get)
 }
 
@@ -400,6 +404,113 @@ func (h *Handler) degradeAccounts(c *gin.Context) {
 		},
 		Events: events,
 	})
+}
+
+func (h *Handler) requestCallStatus(c *gin.Context) {
+	result, err := h.service.RequestCallStatus(c.Request.Context(), c.Query("search"), c.Query("period"), newListFilter(c), parseCallStatusThresholds(c))
+	if errors.Is(err, auditapp.ErrInvalidFilter) {
+		response.Error(c, http.StatusBadRequest, "invalidFilter", err.Error())
+		return
+	}
+	if errors.Is(err, auditapp.ErrInvalidPeriod) {
+		response.Error(c, http.StatusBadRequest, "invalidAuditPeriod", "period 仅支持 24h、7d、30d、90d")
+		return
+	}
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "auditCallStatusFailed", "读取请求调用趋势失败")
+		return
+	}
+	if result.Points == nil {
+		result.Points = []auditapp.CallStatusPoint{}
+	}
+	response.Success(c, http.StatusOK, result)
+}
+
+func (h *Handler) accountCallStatus(c *gin.Context) {
+	ids, err := parseAccountIDs(c.Query("accountIds"))
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalidFilter", "accountIds 无效")
+		return
+	}
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	result, err := h.service.AccountCallStatus(c.Request.Context(), ids, limit, parseCallStatusThresholds(c))
+	if errors.Is(err, auditapp.ErrInvalidAccountIDs) {
+		response.Error(c, http.StatusBadRequest, "invalidFilter", "accountIds 最多 100 个")
+		return
+	}
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "auditCallStatusFailed", "读取账号调用状态失败")
+		return
+	}
+	accounts := make(map[string]auditapp.AccountCallStatus, len(result.Accounts))
+	for id, account := range result.Accounts {
+		if account.Samples == nil {
+			account.Samples = []auditapp.CallStatusSample{}
+		}
+		accounts[strconv.FormatUint(id, 10)] = account
+	}
+	response.Success(c, http.StatusOK, gin.H{
+		"generatedAt": result.GeneratedAt,
+		"thresholds":  result.Thresholds,
+		"accounts":    accounts,
+	})
+}
+
+func (h *Handler) accountCallStatusDetail(c *gin.Context) {
+	accountID, err := strconv.ParseUint(c.Param("accountId"), 10, 64)
+	if err != nil || accountID == 0 {
+		response.Error(c, http.StatusBadRequest, "invalidId", "账号 ID 无效")
+		return
+	}
+	includeProbes, _ := strconv.ParseBool(c.Query("includeProbes"))
+	result, err := h.service.AccountCallStatusDetail(
+		c.Request.Context(), accountID, c.DefaultQuery("window", "24h"), includeProbes, parseCallStatusThresholds(c),
+	)
+	if errors.Is(err, auditapp.ErrInvalidAccountID) {
+		response.Error(c, http.StatusBadRequest, "invalidId", "账号 ID 无效")
+		return
+	}
+	if errors.Is(err, auditapp.ErrInvalidPeriod) {
+		response.Error(c, http.StatusBadRequest, "invalidAuditPeriod", "window 仅支持 1h、6h、24h、7d")
+		return
+	}
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "auditCallStatusFailed", "读取账号调用状态失败")
+		return
+	}
+	if result.Points == nil {
+		result.Points = []auditapp.CallStatusPoint{}
+	}
+	response.Success(c, http.StatusOK, result)
+}
+
+func parseCallStatusThresholds(c *gin.Context) auditapp.CallStatusThresholds {
+	softTPS, _ := strconv.ParseFloat(c.Query("softTPS"), 64)
+	hardTPS, _ := strconv.ParseFloat(c.Query("hardTPS"), 64)
+	minGenMS, _ := strconv.ParseInt(c.Query("minGenMs"), 10, 64)
+	failClosed, _ := strconv.ParseBool(c.Query("failClosed"))
+	return auditapp.CallStatusThresholds{SoftTPS: softTPS, HardTPS: hardTPS, MinGenMS: minGenMS, FailClosed: failClosed}
+}
+
+func parseAccountIDs(raw string) ([]uint64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	ids := make([]uint64, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 type degradeSummaryResponse struct {

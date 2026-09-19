@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, ClipboardPaste, Compass, Download, ExternalLink, FileUp, Link, MoreHorizontal, Pencil, Plus, RefreshCw, RotateCw, Search, SquareTerminal, TimerOff, Trash2, TriangleAlert, Webhook } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -91,7 +91,11 @@ import { AccountQuota, ConsoleQuota, WebQuota } from "@/features/accounts/accoun
 import { AccountNameCell } from "@/features/accounts/account-name-cell";
 import { WebAccountScriptsDialog } from "@/features/accounts/web-account-scripts";
 import { WebAccountSettingsDialogs, WebAccountSettingsMenu, type WebAccountConfirmationTarget } from "@/features/accounts/web-account-settings";
+import { getQualityGuardStatus, qualityGuardCallStatusThresholds } from "@/features/quality-guard/quality-guard-api";
 import { assignEgressAccounts, listAllEgressNodes, listEgressNodes, listEgressSources, unassignEgressAccounts, type EgressScope } from "@/features/settings/settings-api";
+import { AccountCallStatusDialog } from "@/shared/components/account-call-status/account-call-status-dialog";
+import { AccountCallStatusSparkline } from "@/shared/components/account-call-status/account-call-status-sparkline";
+import { getAccountCallStatus, uniqueAccountIds, type AccountCallStatusDTO } from "@/shared/components/account-call-status/account-call-status-api";
 
 function isAbortError(error: unknown): boolean {
   return (error instanceof DOMException || error instanceof Error) && error.name === "AbortError";
@@ -140,6 +144,7 @@ export function AccountsPage() {
   const [riskFilter, setRiskFilter] = useState("");
   const [agreementFilter, setAgreementFilter] = useState("");
   const [associationFilter, setAssociationFilter] = useState("");
+  const [callStatusAccount, setCallStatusAccount] = useState<{ id: string; label: string } | null>(null);
   const [sort, setSort] = useState<TableSort>({ field: "createdAt", order: "desc" });
   const [selection, setSelection] = useState<AccountSelection>(() => ({ provider: "grok_build", ids: new Set() }));
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
@@ -233,6 +238,13 @@ export function AccountsPage() {
   const selected = selection.provider === provider ? selection.ids : new Set<string>();
   const selectedIdsKey = Array.from(selected).sort().join(",");
 
+  const qualityGuardQuery = useQuery({
+    queryKey: ["quality-guard", "policy"],
+    queryFn: () => getQualityGuardStatus(),
+    staleTime: 15_000,
+  });
+  const callStatusThresholds = qualityGuardCallStatusThresholds(qualityGuardQuery.data);
+
   const accountsQuery = useQuery({
     queryKey: ["accounts", provider, page, pageSize, debouncedSearch, typeFilter, statusFilter, egressFilter, renewalFilter, riskFilter, agreementFilter, associationFilter, sort.field, sort.order],
     queryFn: () => listAccounts({
@@ -244,6 +256,14 @@ export function AccountsPage() {
       sortBy: sort.field, sortOrder: sort.order,
     }),
   });
+  const accountIds = useMemo(() => uniqueAccountIds((accountsQuery.data?.items ?? []).map((account) => account.id)), [accountsQuery.data?.items]);
+  const callStatusQuery = useQuery({
+    queryKey: ["account-call-status", accountIds.join(","), callStatusThresholds?.softTPS, callStatusThresholds?.hardTPS, callStatusThresholds?.minGenMs, callStatusThresholds?.failClosed],
+    queryFn: ({ signal }) => getAccountCallStatus({ accountIds, thresholds: callStatusThresholds }, signal),
+    enabled: accountIds.length > 0,
+    staleTime: 15_000,
+  });
+  const callStatusByAccount = callStatusQuery.data?.accounts;
 
   const summaryQuery = useQuery({
     queryKey: ["accounts", "summary"],
@@ -1018,6 +1038,7 @@ export function AccountsPage() {
     setRiskFilter("");
     setAgreementFilter("");
     setAssociationFilter("");
+    setCallStatusAccount(null);
     setQuickImportOpen(false);
     setQuickImportTokens("");
     // Cleanup dialog state is provider-scoped: linked targets from another pool
@@ -1463,7 +1484,7 @@ export function AccountsPage() {
         {accountsQuery.isError ? <ErrorState message={accountsQuery.error.message} onRetry={() => void accountsQuery.refetch()} /> : null}
         {result && result.items.length === 0 ? <EmptyState /> : null}
         {accountsQuery.isPending || (result && result.items.length > 0) ? (
-          <Table viewportRows={20} rowHeight={56} className="table-fixed border-collapse min-w-[780px] xl:min-w-[960px] 2xl:min-w-[1080px]">
+          <Table viewportRows={20} rowHeight={80} className="table-fixed border-collapse min-w-[780px] xl:min-w-[960px] 2xl:min-w-[1080px]">
             <colgroup>
               <col style={{ width: "3%" }} />
               <col style={{ width: "18%" }} />
@@ -1492,13 +1513,19 @@ export function AccountsPage() {
               <VirtualTableBody
                 items={result?.items ?? []}
                 colSpan={provider === "grok_build" ? 8 : 7}
-                rowHeight={56}
+                rowHeight={80}
                 renderRow={(account) => (
-	                  <TableRow className="group h-14 [&>td]:py-1.5" key={account.id} data-state={selected.has(account.id) ? "selected" : undefined}>
+	                  <TableRow className="group h-20 [&>td]:py-1.5" key={account.id} data-state={selected.has(account.id) ? "selected" : undefined}>
                     <TableCell className="px-2"><Checkbox checked={selected.has(account.id)} onCheckedChange={(checked) => toggleAccount(account.id, checked === true)} aria-label={t("common.selectItem", { name: account.name })} /></TableCell>
 	                    <TableCell className="min-w-0"><AccountNameCell account={account} /></TableCell>
                     <TableCell className="text-center whitespace-nowrap">{provider === "grok_web" ? <WebAccountType tier={account.webTier} /> : provider === "grok_console" ? <AccountTypeText label={t("accountType.console")} variant="free" /> : <AccountType quota={account.quota} />}</TableCell>
-                    <TableCell className="text-center whitespace-nowrap"><AccountStatus account={account} /></TableCell>
+                    <TableCell className="text-center whitespace-nowrap">
+                      <AccountStatus
+                        account={account}
+                        callStatus={callStatusByAccount?.[account.id]}
+                        onOpenCallStatus={() => setCallStatusAccount({ id: account.id, label: account.name || account.email || `#${account.id}` })}
+                      />
+                    </TableCell>
                     <TableCell className={provider === "grok_build" ? undefined : "px-6"}>{provider === "grok_web" ? <WebQuota windows={account.quotaWindows ?? []} locale={i18n.language} tier={account.webTier} /> : provider === "grok_console" ? <ConsoleQuota windows={account.quotaWindows ?? []} locale={i18n.language} /> : <AccountQuota quota={account.quota} billing={account.billing} locale={i18n.language} />}</TableCell>
                     {provider === "grok_build" ? <TableCell className="whitespace-nowrap pl-4 text-xs">
                       {account.refreshable ? (
@@ -1542,6 +1569,14 @@ export function AccountsPage() {
         ) : null}
         </DataTableShell>
       </div>
+      <AccountCallStatusDialog
+        key={callStatusAccount?.id ?? "closed"}
+        accountId={callStatusAccount?.id}
+        accountLabel={callStatusAccount?.label}
+        open={callStatusAccount !== null}
+        onOpenChange={(open) => { if (!open) setCallStatusAccount(null); }}
+        thresholds={callStatusThresholds}
+      />
 
       <WebAccountSettingsDialogs
         confirmationTarget={webConfirmationTarget}
@@ -2343,7 +2378,20 @@ function AccountTypeText({ label, title, variant }: { label: string; title?: str
   return <span title={title ?? label} className={cn("max-w-32 truncate text-xs font-medium", variant === "free" ? "text-emerald-700 dark:text-emerald-300" : "text-primary")}>{label}</span>;
 }
 
-function AccountStatus({ account }: { account: AccountDTO }) {
+function AccountStatus({ account, callStatus, onOpenCallStatus }: {
+  account: AccountDTO;
+  callStatus?: AccountCallStatusDTO;
+  onOpenCallStatus: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-1">
+      <AccountStatusBadge account={account} />
+      <AccountCallStatusSparkline status={callStatus} onOpen={onOpenCallStatus} />
+    </div>
+  );
+}
+
+function AccountStatusBadge({ account }: { account: AccountDTO }) {
   const { t, i18n } = useTranslation();
   if (!account.enabled) {
     return <Badge variant="outline" className="text-muted-foreground">{t("accounts.statusDisabled")}</Badge>;

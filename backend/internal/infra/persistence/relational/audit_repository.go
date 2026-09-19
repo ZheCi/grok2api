@@ -33,6 +33,10 @@ const (
 	auditSuccessAggregate  = "COALESCE(SUM(CASE WHEN " + auditSuccessPredicate + " THEN 1 ELSE 0 END), 0)"
 )
 
+// auditHistoryAbsoluteCap is the hard ceiling for unbounded call-status history
+// scans. Tests may lower it.
+var auditHistoryAbsoluteCap = 2001
+
 var errAuditBatchRequiresFallback = errors.New("audit batch requires idempotent fallback")
 
 type preparedAudit struct {
@@ -563,6 +567,72 @@ func normalizedFirstToken(value audit.Record) *int64 {
 		return nil
 	}
 	return &normalized
+}
+
+func (r *AuditRepository) ListRecentByAccounts(ctx context.Context, input repository.AccountCallStatusQuery) ([]audit.Record, error) {
+	if len(input.AccountIDs) == 0 || input.Limit <= 0 {
+		return nil, nil
+	}
+	ranked := r.db.db.WithContext(ctx).Model(&requestAuditModel{}).
+		Select("request_audits.*, ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY created_at DESC, id DESC) AS rn").
+		Where("account_id IN ?", input.AccountIDs)
+	if !input.IncludeProbes {
+		ranked = ranked.Where("request_id NOT LIKE ?", audit.QualityProbeRequestPrefix+"%")
+	}
+	var rows []requestAuditModel
+	if err := r.db.db.WithContext(ctx).
+		Table("(?) AS ranked", ranked).
+		Where("rn <= ?", input.Limit).
+		Omit("request_headers_json").
+		Order("account_id ASC, created_at DESC, id DESC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]audit.Record, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, toAuditDomain(row))
+	}
+	return out, nil
+}
+
+func (r *AuditRepository) ListByAccountSince(ctx context.Context, input repository.AccountCallHistoryQuery) ([]audit.Record, error) {
+	if input.AccountID == 0 {
+		return nil, nil
+	}
+	query := r.db.db.WithContext(ctx).Model(&requestAuditModel{}).
+		Where("account_id = ?", input.AccountID)
+	if !input.Start.IsZero() {
+		query = query.Where("created_at >= ?", input.Start)
+	}
+	if !input.End.IsZero() {
+		query = query.Where("created_at < ?", input.End)
+	}
+	if !input.IncludeProbes {
+		query = query.Where("request_id NOT LIKE ?", audit.QualityProbeRequestPrefix+"%")
+	}
+	return scanAuditHistory(query, input.Limit)
+}
+
+func (r *AuditRepository) ListRecentSince(ctx context.Context, input repository.AuditHistoryQuery) ([]audit.Record, error) {
+	query := applyAuditQuery(r.db.db.WithContext(ctx).Model(&requestAuditModel{}), input.Search, input.Start, input.End, input.Filter)
+	return scanAuditHistory(query, input.Limit)
+}
+
+func scanAuditHistory(query *gorm.DB, limit int) ([]audit.Record, error) {
+	var rows []requestAuditModel
+	query = query.Omit("request_headers_json").Order("created_at DESC, id DESC")
+	if limit <= 0 || limit > auditHistoryAbsoluteCap {
+		limit = auditHistoryAbsoluteCap
+	}
+	query = query.Limit(limit)
+	if err := query.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]audit.Record, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, toAuditDomain(row))
+	}
+	return out, nil
 }
 
 func (r *AuditRepository) SumTokensByAccountsSince(ctx context.Context, accountIDs []uint64, since time.Time) (map[uint64]int64, error) {

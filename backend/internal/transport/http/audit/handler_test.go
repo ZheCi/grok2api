@@ -213,3 +213,64 @@ func TestDegradeAccountsListsHardHitsAndRejectsUnknownWindow(t *testing.T) {
 		t.Fatalf("bad window status=%d body=%s", bad.Code, bad.Body.String())
 	}
 }
+
+func TestAccountCallStatusEndpoints(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "call-status-handler.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := relational.NewAuditRepository(database)
+	now := time.Now().UTC()
+	first := int64(200)
+	accountID := uint64(11)
+	if err := repo.Create(ctx, auditdomain.Record{
+		RequestID: "call-hard", ClientKeyID: 1, ModelRouteID: 1, AccountID: &accountID, AccountName: "noisy",
+		StatusCode: 200, Streaming: true, OutputTokens: 2000, FirstTokenMS: &first, DurationMS: 1200, CreatedAt: now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	NewHandler(auditapp.NewService(repo, slog.Default(), 8, 4, time.Second)).Register(router.Group("/api/admin/v1"))
+
+	batch := httptest.NewRecorder()
+	router.ServeHTTP(batch, httptest.NewRequest(http.MethodGet, "/api/admin/v1/request-audits/account-call-status?accountIds=11,11,99&limit=32", nil))
+	if batch.Code != http.StatusOK || !strings.Contains(batch.Body.String(), `"11":{`) || !strings.Contains(batch.Body.String(), `"degraded":1`) {
+		t.Fatalf("batch status=%d body=%s", batch.Code, batch.Body.String())
+	}
+
+	detail := httptest.NewRecorder()
+	router.ServeHTTP(detail, httptest.NewRequest(http.MethodGet, "/api/admin/v1/request-audits/accounts/11/call-status?window=24h", nil))
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"accountId":"11"`) || !strings.Contains(detail.Body.String(), `"level":"degraded"`) {
+		t.Fatalf("detail status=%d body=%s", detail.Code, detail.Body.String())
+	}
+
+	bad := httptest.NewRecorder()
+	router.ServeHTTP(bad, httptest.NewRequest(http.MethodGet, "/api/admin/v1/request-audits/accounts/11/call-status?window=3h", nil))
+	if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), "invalidAuditPeriod") {
+		t.Fatalf("bad window status=%d body=%s", bad.Code, bad.Body.String())
+	}
+
+	invalid := httptest.NewRecorder()
+	router.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/api/admin/v1/request-audits/account-call-status?accountIds=abc", nil))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid ids status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+
+	trend := httptest.NewRecorder()
+	router.ServeHTTP(trend, httptest.NewRequest(http.MethodGet, "/api/admin/v1/request-audits/call-status?period=24h", nil))
+	if trend.Code != http.StatusOK || !strings.Contains(trend.Body.String(), `"period":"24h"`) || !strings.Contains(trend.Body.String(), `"level":"degraded"`) {
+		t.Fatalf("trend status=%d body=%s", trend.Code, trend.Body.String())
+	}
+
+	badPeriod := httptest.NewRecorder()
+	router.ServeHTTP(badPeriod, httptest.NewRequest(http.MethodGet, "/api/admin/v1/request-audits/call-status?period=3h", nil))
+	if badPeriod.Code != http.StatusBadRequest || !strings.Contains(badPeriod.Body.String(), "invalidAuditPeriod") {
+		t.Fatalf("bad period status=%d body=%s", badPeriod.Code, badPeriod.Body.String())
+	}
+}

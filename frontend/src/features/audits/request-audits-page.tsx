@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ArrowDown, ArrowUp, BrainCircuit, CircleCheck, CircleDollarSign, CornerDownRight, Database, Globe2, Info, Minimize2, RefreshCw, Search, WholeWord, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -14,6 +14,11 @@ import { listAccounts } from "@/features/accounts/accounts-api";
 import { RequestAuditDetailDialog } from "@/features/audits/request-audit-detail-dialog";
 import { buildAuditUsageView } from "@/features/audits/audit-usage";
 import { getRequestAudits, getRequestAuditSummary, type AuditBillingBreakdownDTO, type AuditBillingComponentDTO, type AuditDTO, type AuditPeriod } from "@/features/audits/request-audits-api";
+import { RequestAuditTrend } from "@/features/audits/request-audit-trend";
+import { getQualityGuardStatus, qualityGuardCallStatusThresholds } from "@/features/quality-guard/quality-guard-api";
+import { AccountCallStatusDialog } from "@/shared/components/account-call-status/account-call-status-dialog";
+import { AccountCallStatusSparkline } from "@/shared/components/account-call-status/account-call-status-sparkline";
+import { getAccountCallStatus, uniqueAccountIds, type AccountCallStatusDTO } from "@/shared/components/account-call-status/account-call-status-api";
 import { EmptyState, ErrorState, TableLoadingRow } from "@/shared/components/data-state";
 import { DataTableShell } from "@/shared/components/data-table-shell";
 import { DataTableFilters } from "@/shared/components/data-table-filters";
@@ -39,6 +44,8 @@ type AuditCursorState = { scope: string; values: string[] };
 
 export function RequestAuditsPage() {
   const { t, i18n } = useTranslation();
+  const queryClient = useQueryClient();
+  const trendFetching = useIsFetching({ queryKey: ["request-audits", "call-status"] }) > 0;
   const [pageSize, setPageSize] = useState(20);
   const [search, setSearch] = useState("");
   const [modelFilter, setModelFilter] = useState("");
@@ -50,6 +57,7 @@ export function RequestAuditsPage() {
   const [sort, setSort] = useState<TableSort>({ field: "createdAt", order: "desc" });
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const [selectedAudit, setSelectedAudit] = useState<AuditDTO | null>(null);
+  const [callStatusAccount, setCallStatusAccount] = useState<{ id: string; label: string; highlightId?: string } | null>(null);
   const forceSummaryRefresh = useRef(false);
   const debouncedSearch = useDebouncedValue(search);
   const debouncedKeyFilter = useDebouncedValue(keyFilter);
@@ -151,6 +159,20 @@ export function RequestAuditsPage() {
     },
   ];
   const result = auditsQuery.data;
+  const accountIds = useMemo(() => uniqueAccountIds((result?.items ?? []).map((item) => item.accountId)), [result?.items]);
+  const qualityGuardQuery = useQuery({
+    queryKey: ["quality-guard", "policy"],
+    queryFn: () => getQualityGuardStatus(),
+    staleTime: 15_000,
+  });
+  const callStatusThresholds = qualityGuardCallStatusThresholds(qualityGuardQuery.data);
+  const callStatusQuery = useQuery({
+    queryKey: ["account-call-status", accountIds.join(","), callStatusThresholds?.softTPS, callStatusThresholds?.hardTPS, callStatusThresholds?.minGenMs, callStatusThresholds?.failClosed],
+    queryFn: ({ signal }) => getAccountCallStatus({ accountIds, thresholds: callStatusThresholds }, signal),
+    enabled: accountIds.length > 0,
+    staleTime: 15_000,
+  });
+  const callStatusByAccount = callStatusQuery.data?.accounts;
   const nextCursor = result?.nextCursor ?? "";
   const summary = summaryQuery.data;
   const summaryLoading = summaryQuery.isPending || summaryQuery.isPlaceholderData;
@@ -159,7 +181,24 @@ export function RequestAuditsPage() {
   const hasEstimatedCost = (summary?.pricing.pricedRequests ?? 0) > 0;
   const modelOptions = useMemo(() => [...new Map((modelOptionsQuery.data?.items ?? []).map((model) => [model.publicId, { value: model.publicId, label: model.publicId }])).values()], [modelOptionsQuery.data?.items]);
   const openAudit = useCallback((audit: AuditDTO) => setSelectedAudit(audit), []);
-  const renderAuditRow = useCallback((audit: AuditDTO) => <AuditRow key={audit.id} audit={audit} locale={i18n.language} onOpen={openAudit} />, [i18n.language, openAudit]);
+  const openCallStatus = useCallback((audit: AuditDTO) => {
+    if (!audit.accountId) return;
+    setCallStatusAccount({
+      id: audit.accountId,
+      label: audit.accountName || `#${audit.accountId}`,
+      highlightId: audit.id,
+    });
+  }, []);
+  const renderAuditRow = useCallback((audit: AuditDTO) => (
+    <AuditRow
+      key={audit.id}
+      audit={audit}
+      locale={i18n.language}
+      callStatus={audit.accountId ? callStatusByAccount?.[audit.accountId] : undefined}
+      onOpen={openAudit}
+      onOpenCallStatus={openCallStatus}
+    />
+  ), [callStatusByAccount, i18n.language, openAudit, openCallStatus]);
 
   function refreshAll(): void {
     setManualRefreshing(true);
@@ -167,6 +206,8 @@ export function RequestAuditsPage() {
     void Promise.all([
       auditsQuery.refetch(),
       summaryQuery.refetch(),
+      callStatusQuery.refetch(),
+      queryClient.refetchQueries({ queryKey: ["request-audits", "call-status"] }),
       new Promise<void>((resolve) => window.setTimeout(resolve, 400)),
     ]).finally(() => {
       forceSummaryRefresh.current = false;
@@ -186,7 +227,7 @@ export function RequestAuditsPage() {
         actions={(
           <>
             <PeriodSelector value={periodDays} onChange={setPeriodDays} ariaLabel={t("audits.usageSummary")} />
-            <Button variant="secondary" size="sm" onClick={refreshAll} disabled={auditsQuery.isFetching || summaryQuery.isFetching || manualRefreshing}><RefreshCw className={manualRefreshing || auditsQuery.isFetching || summaryQuery.isFetching ? "animate-spin" : undefined} />{t("common.refresh")}</Button>
+            <Button variant="secondary" size="sm" onClick={refreshAll} disabled={auditsQuery.isFetching || summaryQuery.isFetching || trendFetching || manualRefreshing}><RefreshCw className={manualRefreshing || auditsQuery.isFetching || summaryQuery.isFetching || trendFetching ? "animate-spin" : undefined} />{t("common.refresh")}</Button>
           </>
         )}
       />
@@ -213,6 +254,18 @@ export function RequestAuditsPage() {
           <AuditTokenMetric icon={BrainCircuit} loading={summaryLoading} label={t("audits.reasoning")} value={formatNumber(summary?.usage.reasoningTokens ?? 0, i18n.language, 0)} />
         </div>
       </section>
+
+      <RequestAuditTrend
+        period={period}
+        search={debouncedSearch}
+        model={modelFilter}
+        status={statusFilter}
+        mode={modeFilter}
+        keyFilter={debouncedKeyFilter}
+        account={debouncedAccountFilter}
+        thresholds={callStatusThresholds}
+        onOpenAudit={openAudit}
+      />
 
       <DataTableShell
         toolbar={(
@@ -278,13 +331,13 @@ export function RequestAuditsPage() {
         {auditsQuery.isError ? <ErrorState message={auditsQuery.error.message} onRetry={() => void auditsQuery.refetch()} /> : null}
         {result && result.items.length === 0 ? <EmptyState /> : null}
         {auditsQuery.isPending || (result && result.items.length > 0) ? (
-          <Table viewportRows={20} rowHeight={96} aria-busy={auditsQuery.isFetching} className={cn("min-w-[1008px] table-fixed text-xs transition-opacity", auditsQuery.isPlaceholderData && "pointer-events-none opacity-60")}>
+          <Table viewportRows={20} rowHeight={96} aria-busy={auditsQuery.isFetching} className={cn("min-w-[1080px] table-fixed text-xs transition-opacity", auditsQuery.isPlaceholderData && "pointer-events-none opacity-60")}>
             <colgroup>
               <col className="w-36" />
               <col className="w-24" />
               <col className="w-24" />
               <col className="w-64" />
-              <col className="w-24" />
+              <col className="w-40" />
               <col className="w-40" />
               <col className="w-40" />
             </colgroup>
@@ -308,11 +361,28 @@ export function RequestAuditsPage() {
         ) : null}
       </DataTableShell>
       <RequestAuditDetailDialog key={selectedAudit?.id ?? "closed"} audit={selectedAudit} open={selectedAudit !== null} onOpenChange={(open) => !open && setSelectedAudit(null)} />
+      <AccountCallStatusDialog
+        key={callStatusAccount?.id ?? "closed"}
+        accountId={callStatusAccount?.id}
+        accountLabel={callStatusAccount?.label}
+        highlightId={callStatusAccount?.highlightId}
+        open={callStatusAccount !== null}
+        onOpenChange={(open) => { if (!open) setCallStatusAccount(null); }}
+        thresholds={callStatusThresholds}
+      />
     </div>
   );
 }
 
-const AuditRow = memo(function AuditRow({ audit, locale, onOpen }: { audit: AuditDTO; locale: string; onOpen: (audit: AuditDTO) => void }) {
+const AuditRow = memo(function AuditRow({
+  audit, locale, callStatus, onOpen, onOpenCallStatus,
+}: {
+  audit: AuditDTO;
+  locale: string;
+  callStatus?: AccountCallStatusDTO;
+  onOpen: (audit: AuditDTO) => void;
+  onOpenCallStatus: (audit: AuditDTO) => void;
+}) {
   const createdAt = formatCompactDateTime(audit.createdAt, locale);
   const createdAtLabel = formatDateTime(audit.createdAt, locale);
   return (
@@ -333,7 +403,7 @@ const AuditRow = memo(function AuditRow({ audit, locale, onOpen }: { audit: Audi
       <TableCell className="text-center"><EgressValue audit={audit} /></TableCell>
       <TableCell><BillingValue audit={audit} /></TableCell>
       <TableCell className="px-3"><UsageDetails audit={audit} locale={locale} /></TableCell>
-      <TableCell className="text-center"><AuditStatus audit={audit} onOpen={() => onOpen(audit)} /></TableCell>
+      <TableCell className="text-center"><AuditStatus audit={audit} callStatus={callStatus} onOpen={() => onOpen(audit)} onOpenCallStatus={() => onOpenCallStatus(audit)} /></TableCell>
       <TableCell><ResponsePerformance audit={audit} locale={locale} /></TableCell>
       <TableCell className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
         <time dateTime={audit.createdAt} title={createdAtLabel}>{createdAt}</time>
@@ -685,7 +755,7 @@ function StatusCode({ statusCode, hasError = false }: { statusCode: number; hasE
   );
 }
 
-function AuditStatus({ audit, onOpen }: { audit: AuditDTO; onOpen: () => void }) {
+function AuditStatus({ audit, callStatus, onOpen, onOpenCallStatus }: { audit: AuditDTO; callStatus?: AccountCallStatusDTO; onOpen: () => void; onOpenCallStatus: () => void }) {
   const { t } = useTranslation();
   const mode = audit.operation === "compaction" ? t("audits.operations.compaction") : audit.streaming ? t("audits.stream") : t("audits.nonStream");
   const hasError = Boolean(audit.errorCode);
@@ -706,21 +776,29 @@ function AuditStatus({ audit, onOpen }: { audit: AuditDTO; onOpen: () => void })
     </>
   );
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          className="group inline-flex flex-col items-center justify-center space-y-0.5 rounded-md px-2 py-1 text-center outline-none transition-colors hover:bg-muted/80 focus-visible:ring-2 focus-visible:ring-ring/50 [&>span:last-child]:underline-offset-2 hover:[&>span:last-child]:text-foreground hover:[&>span:last-child]:underline cursor-pointer"
-          aria-label={t("audits.viewDetails")}
-          onClick={onOpen}
-        >
-          {content}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-80 whitespace-normal break-words text-left leading-5" side="top">
-        {audit.errorCode || t("audits.viewDetails")}
-      </TooltipContent>
-    </Tooltip>
+    <div className="flex flex-col items-center justify-center gap-1">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="group inline-flex flex-col items-center justify-center space-y-0.5 rounded-md px-2 py-1 text-center outline-none transition-colors hover:bg-muted/80 focus-visible:ring-2 focus-visible:ring-ring/50 [&>span:last-child]:underline-offset-2 hover:[&>span:last-child]:text-foreground hover:[&>span:last-child]:underline cursor-pointer"
+            aria-label={t("audits.viewDetails")}
+            onClick={onOpen}
+          >
+            {content}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-80 whitespace-normal break-words text-left leading-5" side="top">
+          {audit.errorCode || t("audits.viewDetails")}
+        </TooltipContent>
+      </Tooltip>
+      <AccountCallStatusSparkline
+        status={callStatus}
+        highlightId={audit.id}
+        disabled={!audit.accountId}
+        onOpen={audit.accountId ? onOpenCallStatus : undefined}
+      />
+    </div>
   );
 }
 

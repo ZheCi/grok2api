@@ -91,37 +91,39 @@ type auditWriteRequest struct {
 
 // Service 提供请求元数据审计查询，以及有界异步批量写入。
 type Service struct {
-	audits               repository.AuditRepository
-	logger               *slog.Logger
-	queue                chan auditWriteRequest
-	batchSize            atomic.Int64
-	flushInterval        atomic.Int64
-	commitDelay          atomic.Int64
-	configChanged        chan struct{}
-	lifecycleMu          sync.RWMutex
-	queueSpace           chan struct{}
-	queueWaiters         atomic.Int64
-	startOnce            sync.Once
-	stopOnce             sync.Once
-	stop                 chan struct{}
-	done                 chan struct{}
-	stopped              atomic.Bool
-	started              atomic.Bool
-	dropped              atomic.Uint64
-	now                  func() time.Time
-	summaryCache         *resultcache.Cache[string, SummaryResult]
-	ledgerMu             sync.Mutex
-	ledgerConfig         LedgerConfig
-	ledgerFailures       int
-	ledgerUnhealthySince time.Time
-	ledgerLastSuccess    time.Time
-	ledgerLastFailure    time.Time
-	ledgerLastDrop       time.Time
-	ledgerQueueHighSince time.Time
-	ledgerLastWarning    time.Time
-	observerMu           sync.RWMutex
-	commitObserver       func([]string)
-	dropObserver         func([]string)
+	audits                 repository.AuditRepository
+	logger                 *slog.Logger
+	queue                  chan auditWriteRequest
+	batchSize              atomic.Int64
+	flushInterval          atomic.Int64
+	commitDelay            atomic.Int64
+	configChanged          chan struct{}
+	lifecycleMu            sync.RWMutex
+	queueSpace             chan struct{}
+	queueWaiters           atomic.Int64
+	startOnce              sync.Once
+	stopOnce               sync.Once
+	stop                   chan struct{}
+	done                   chan struct{}
+	stopped                atomic.Bool
+	started                atomic.Bool
+	dropped                atomic.Uint64
+	now                    func() time.Time
+	summaryCache           *resultcache.Cache[string, SummaryResult]
+	callStatusCache        *resultcache.Cache[string, CallStatusBatch]
+	requestCallStatusCache *resultcache.Cache[string, RequestCallStatus]
+	ledgerMu               sync.Mutex
+	ledgerConfig           LedgerConfig
+	ledgerFailures         int
+	ledgerUnhealthySince   time.Time
+	ledgerLastSuccess      time.Time
+	ledgerLastFailure      time.Time
+	ledgerLastDrop         time.Time
+	ledgerQueueHighSince   time.Time
+	ledgerLastWarning      time.Time
+	observerMu             sync.RWMutex
+	commitObserver         func([]string)
+	dropObserver           func([]string)
 }
 
 func NewService(audits repository.AuditRepository, logger *slog.Logger, bufferSize, batchSize int, flushInterval time.Duration) *Service {
@@ -132,7 +134,9 @@ func NewService(audits repository.AuditRepository, logger *slog.Logger, bufferSi
 		audits: audits, logger: logger, queue: make(chan auditWriteRequest, bufferSize),
 		configChanged: make(chan struct{}, 1), queueSpace: make(chan struct{}, bufferSize), stop: make(chan struct{}), done: make(chan struct{}),
 		now: time.Now, summaryCache: resultcache.New[string, SummaryResult](64, auditSummaryTTL),
-		ledgerConfig: defaultLedgerConfig(),
+		callStatusCache:        resultcache.New[string, CallStatusBatch](64, callStatusCacheTTL),
+		requestCallStatusCache: resultcache.New[string, RequestCallStatus](32, callStatusCacheTTL),
+		ledgerConfig:           defaultLedgerConfig(),
 	}
 	service.UpdateConfig(batchSize, flushInterval)
 	return service
