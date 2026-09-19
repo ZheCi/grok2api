@@ -187,6 +187,302 @@ func TestEgressOperationsBalanceNeverMovesManualBindings(t *testing.T) {
 	}
 }
 
+func TestEgressOperationsScheduledBalanceHonorsRecentBindCooldown(t *testing.T) {
+	ctx := context.Background()
+	database := openTestDatabase(t)
+	accounts := NewAccountRepository(database)
+	nodes := NewEgressRepository(database)
+	cipher := egressOperationsCipher(t)
+	crowded := createHealthyEgressNode(t, ctx, nodes, cipher, "crowded", 0)
+	empty := createHealthyEgressNode(t, ctx, nodes, cipher, "empty", 0)
+	ids := []uint64{
+		createEgressOperationsAccount(t, ctx, accounts, "recent-one").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "recent-two").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "recent-three").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "recent-four").ID,
+	}
+	if _, err := accounts.UpdateEgressBindings(ctx, account.ProviderBuild, ids, &crowded.ID, account.EgressAssignmentAuto, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	service := egressapp.NewService(nodes, cipher, "test-browser", accounts)
+	result, err := service.RebalanceAccounts(ctx, true, true, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Rebalanced != 0 {
+		t.Fatalf("scheduled pass moved recent bindings: %#v", result)
+	}
+	for _, id := range ids {
+		actual, err := accounts.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actual.EgressNodeID != crowded.ID {
+			t.Fatalf("scheduled pass moved account %d onto %d, empty node %d", id, actual.EgressNodeID, empty.ID)
+		}
+	}
+}
+
+func TestEgressOperationsImmediateBalanceSpreadsRecentBindings(t *testing.T) {
+	ctx := context.Background()
+	database := openTestDatabase(t)
+	accounts := NewAccountRepository(database)
+	nodes := NewEgressRepository(database)
+	cipher := egressOperationsCipher(t)
+	crowded := createHealthyEgressNode(t, ctx, nodes, cipher, "crowded", 0)
+	empty := createHealthyEgressNode(t, ctx, nodes, cipher, "empty", 0)
+	ids := []uint64{
+		createEgressOperationsAccount(t, ctx, accounts, "now-one").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "now-two").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "now-three").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "now-four").ID,
+	}
+	if _, err := accounts.UpdateEgressBindings(ctx, account.ProviderBuild, ids, &crowded.ID, account.EgressAssignmentAuto, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	service := egressapp.NewService(nodes, cipher, "test-browser", accounts)
+	result, err := service.RebalanceAccountsNow(ctx, true, true, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Rebalanced != 2 {
+		t.Fatalf("immediate rebalance result = %#v", result)
+	}
+	loads := map[uint64]int{}
+	for _, id := range ids {
+		actual, err := accounts.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loads[actual.EgressNodeID]++
+	}
+	if loads[crowded.ID] != 2 || loads[empty.ID] != 2 {
+		t.Fatalf("immediate loads = %#v", loads)
+	}
+}
+
+func TestEgressOperationsImmediateBalanceIgnoresNodeCapacity(t *testing.T) {
+	ctx := context.Background()
+	database := openTestDatabase(t)
+	accounts := NewAccountRepository(database)
+	nodes := NewEgressRepository(database)
+	cipher := egressOperationsCipher(t)
+	first := createHealthyEgressNode(t, ctx, nodes, cipher, "first", 1)
+	second := createHealthyEgressNode(t, ctx, nodes, cipher, "second", 1)
+	created := []account.Credential{
+		createEgressOperationsAccount(t, ctx, accounts, "cap-one"),
+		createEgressOperationsAccount(t, ctx, accounts, "cap-two"),
+		createEgressOperationsAccount(t, ctx, accounts, "cap-three"),
+	}
+
+	service := egressapp.NewService(nodes, cipher, "test-browser", accounts)
+	result, err := service.RebalanceAccountsNow(ctx, true, true, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Assigned != 3 || result.Unplaced != 0 {
+		t.Fatalf("immediate capacity-free result = %#v", result)
+	}
+	loads := map[uint64]int{}
+	for _, value := range created {
+		actual, err := accounts.Get(ctx, value.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actual.EgressNodeID == 0 {
+			t.Fatalf("account %d left unplaced", actual.ID)
+		}
+		loads[actual.EgressNodeID]++
+	}
+	if loads[first.ID]+loads[second.ID] != 3 {
+		t.Fatalf("immediate loads = %#v", loads)
+	}
+	if absInt(loads[first.ID]-loads[second.ID]) > 1 {
+		t.Fatalf("accounts were not spread evenly: %#v", loads)
+	}
+}
+
+func TestEgressOperationsImmediateBalanceKeepsSlightlyStaleHealthyNodes(t *testing.T) {
+	ctx := context.Background()
+	database := openTestDatabase(t)
+	accounts := NewAccountRepository(database)
+	nodes := NewEgressRepository(database)
+	cipher := egressOperationsCipher(t)
+	fresh := createHealthyEgressNode(t, ctx, nodes, cipher, "fresh", 0)
+	stale := createHealthyEgressNode(t, ctx, nodes, cipher, "stale", 0)
+	probedAt := time.Now().UTC().Add(-3 * time.Minute)
+	stale.LastProbedAt = &probedAt
+	if _, err := nodes.UpdateEgressNode(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	ids := []uint64{
+		createEgressOperationsAccount(t, ctx, accounts, "stale-one").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "stale-two").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "stale-three").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "stale-four").ID,
+	}
+	if _, err := accounts.UpdateEgressBindings(ctx, account.ProviderBuild, ids, &fresh.ID, account.EgressAssignmentAuto, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	service := egressapp.NewService(nodes, cipher, "test-browser", accounts)
+	result, err := service.RebalanceAccountsNow(ctx, true, true, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Rebalanced != 2 {
+		t.Fatalf("rebalance result = %#v", result)
+	}
+	loads := map[uint64]int{}
+	for _, id := range ids {
+		actual, err := accounts.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loads[actual.EgressNodeID]++
+	}
+	if loads[fresh.ID] != 2 || loads[stale.ID] != 2 {
+		t.Fatalf("loads = %#v; slightly stale healthy node should still receive accounts", loads)
+	}
+}
+
+func TestEgressOperationsProbeStatusChangeRebalancesImmediately(t *testing.T) {
+	ctx := context.Background()
+	database := openTestDatabase(t)
+	accounts := NewAccountRepository(database)
+	nodes := NewEgressRepository(database)
+	cipher := egressOperationsCipher(t)
+	crowded := createHealthyEgressNode(t, ctx, nodes, cipher, "crowded-probe", 0)
+	empty := createHealthyEgressNode(t, ctx, nodes, cipher, "empty-probe", 0)
+	ids := []uint64{
+		createEgressOperationsAccount(t, ctx, accounts, "probe-one").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "probe-two").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "probe-three").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "probe-four").ID,
+	}
+	if _, err := accounts.UpdateEgressBindings(ctx, account.ProviderBuild, ids, &crowded.ID, account.EgressAssignmentAuto, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	service := egressapp.NewService(nodes, cipher, "test-browser", accounts)
+	service.SetNodeProber(egressProbeStub{result: egress.ProbeResult{
+		Status: egress.ProbeStatusHealthy, TestedAt: time.Now().UTC(),
+	}})
+	if _, err := service.TestNode(ctx, crowded.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		actual, err := accounts.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actual.EgressNodeID != crowded.ID {
+			t.Fatalf("unchanged healthy probe moved account %d onto %d", id, actual.EgressNodeID)
+		}
+	}
+
+	service.SetNodeProber(egressProbeStub{result: egress.ProbeResult{
+		Status: egress.ProbeStatusUnhealthy, TestedAt: time.Now().UTC(), Error: "proxy down",
+	}})
+	if _, err := service.TestNode(ctx, crowded.ID); err != nil {
+		t.Fatal(err)
+	}
+	loads := map[uint64]int{}
+	for _, id := range ids {
+		actual, err := accounts.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loads[actual.EgressNodeID]++
+	}
+	if loads[crowded.ID] != 0 || loads[empty.ID] != 4 {
+		t.Fatalf("unhealthy probe should evacuate automatic bindings: %#v", loads)
+	}
+}
+
+func TestEgressOperationsProbeBatchRebalancesOnce(t *testing.T) {
+	ctx := context.Background()
+	database := openTestDatabase(t)
+	accounts := &retryingAssignmentRepository{AccountRepository: NewAccountRepository(database)}
+	nodes := NewEgressRepository(database)
+	cipher := egressOperationsCipher(t)
+	crowded := createHealthyEgressNode(t, ctx, nodes, cipher, "batch-crowded", 0)
+	empty := createHealthyEgressNode(t, ctx, nodes, cipher, "batch-empty", 0)
+	empty.ProbeStatus = egress.ProbeStatusUnhealthy
+	if _, err := nodes.UpdateEgressNode(ctx, empty); err != nil {
+		t.Fatal(err)
+	}
+	ids := []uint64{
+		createEgressOperationsAccount(t, ctx, accounts.AccountRepository, "batch-one").ID,
+		createEgressOperationsAccount(t, ctx, accounts.AccountRepository, "batch-two").ID,
+		createEgressOperationsAccount(t, ctx, accounts.AccountRepository, "batch-three").ID,
+		createEgressOperationsAccount(t, ctx, accounts.AccountRepository, "batch-four").ID,
+	}
+	if _, err := accounts.UpdateEgressBindings(ctx, account.ProviderBuild, ids, &crowded.ID, account.EgressAssignmentAuto, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	service := egressapp.NewService(nodes, cipher, "test-browser", accounts)
+	service.SetNodeProber(selectiveEgressProbeStub{unhealthy: map[uint64]bool{crowded.ID: true}})
+	if _, err := service.TestNodes(ctx, []uint64{crowded.ID, empty.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if accounts.assignmentCalls != len(account.Providers()) {
+		t.Fatalf("probe batch should rebalance once, assignment calls = %d", accounts.assignmentCalls)
+	}
+	loads := map[uint64]int{}
+	for _, id := range ids {
+		actual, err := accounts.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loads[actual.EgressNodeID]++
+	}
+	if loads[crowded.ID] != 0 || loads[empty.ID] != 4 {
+		t.Fatalf("probe batch should move automatic bindings onto the recovered node: %#v", loads)
+	}
+}
+
+func TestEgressOperationsDisablingNodeRebalancesImmediately(t *testing.T) {
+	ctx := context.Background()
+	database := openTestDatabase(t)
+	accounts := NewAccountRepository(database)
+	nodes := NewEgressRepository(database)
+	cipher := egressOperationsCipher(t)
+	crowded := createHealthyEgressNode(t, ctx, nodes, cipher, "crowded-disable", 0)
+	empty := createHealthyEgressNode(t, ctx, nodes, cipher, "empty-disable", 0)
+	ids := []uint64{
+		createEgressOperationsAccount(t, ctx, accounts, "disable-one").ID,
+		createEgressOperationsAccount(t, ctx, accounts, "disable-two").ID,
+	}
+	if _, err := accounts.UpdateEgressBindings(ctx, account.ProviderBuild, ids, &crowded.ID, account.EgressAssignmentAuto, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	service := egressapp.NewService(nodes, cipher, "test-browser", accounts)
+	if _, err := service.UpdateManyEnabled(ctx, []uint64{crowded.ID}, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		actual, err := accounts.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actual.EgressNodeID != empty.ID {
+			t.Fatalf("disabling the node should move automatic bindings onto %d, got %d", empty.ID, actual.EgressNodeID)
+		}
+	}
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
 func TestEgressOperationsSharesWebNodeCapacityAcrossProviders(t *testing.T) {
 	ctx := context.Background()
 	database := openTestDatabase(t)
@@ -1206,6 +1502,18 @@ func (stub mutatingEgressProbeStub) ProbeEgressNode(ctx context.Context, node eg
 
 func (stub egressProbeStub) ProbeEgressNode(context.Context, egress.Node) (egress.ProbeResult, error) {
 	return stub.result, stub.err
+}
+
+type selectiveEgressProbeStub struct {
+	unhealthy map[uint64]bool
+}
+
+func (stub selectiveEgressProbeStub) ProbeEgressNode(_ context.Context, node egress.Node) (egress.ProbeResult, error) {
+	now := time.Now().UTC()
+	if stub.unhealthy[node.ID] {
+		return egress.ProbeResult{Status: egress.ProbeStatusUnhealthy, TestedAt: now, Error: "proxy down"}, nil
+	}
+	return egress.ProbeResult{Status: egress.ProbeStatusHealthy, TestedAt: now}, nil
 }
 
 func egressOperationsCipher(t *testing.T) *security.Cipher {

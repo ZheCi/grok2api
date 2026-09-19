@@ -1510,7 +1510,7 @@ func (h *Handler) rebalance(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
-	value, err := h.service.RebalanceAccounts(c.Request.Context(), true, true, time.Duration(config.ProbeIntervalSeconds)*time.Second)
+	value, err := h.service.RebalanceAccountsNow(c.Request.Context(), true, true, time.Duration(config.ProbeIntervalSeconds)*time.Second)
 	if err != nil {
 		h.writeError(c, err)
 		return

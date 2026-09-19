@@ -18,6 +18,8 @@ import (
 const (
 	autoAssignmentMigrationCooldown = 5 * time.Minute
 	maxAutomaticReassignments       = 200
+	maxImmediateReassignments       = 10000
+	minAssignmentProbeFreshness     = 15 * time.Minute
 )
 
 type RebalanceResult struct {
@@ -30,6 +32,17 @@ type RebalanceResult struct {
 // explicitly marked auto. Manual bindings are never changed, even when their
 // node is unhealthy or over capacity.
 func (s *Service) RebalanceAccounts(ctx context.Context, autoAssign, autoBalance bool, probeInterval time.Duration) (RebalanceResult, error) {
+	return s.rebalanceAccounts(ctx, autoAssign, autoBalance, probeInterval, false)
+}
+
+// RebalanceAccountsNow is the administrator button. It spreads unbound and
+// automatic bindings across currently healthy nodes in one click: no post-bind
+// cooldown, no per-cycle move ceiling, and no node capacity or share caps.
+func (s *Service) RebalanceAccountsNow(ctx context.Context, autoAssign, autoBalance bool, probeInterval time.Duration) (RebalanceResult, error) {
+	return s.rebalanceAccounts(ctx, autoAssign, autoBalance, probeInterval, true)
+}
+
+func (s *Service) rebalanceAccounts(ctx context.Context, autoAssign, autoBalance bool, probeInterval time.Duration, immediate bool) (RebalanceResult, error) {
 	if s.accounts == nil {
 		return RebalanceResult{}, ErrOperationsUnavailable
 	}
@@ -51,7 +64,7 @@ func (s *Service) RebalanceAccounts(ctx context.Context, autoAssign, autoBalance
 		if err != nil {
 			return result, err
 		}
-		providerResult, providerErr := s.rebalanceProvider(ctx, provider, nodes, autoAssign, autoBalance, probeInterval, now)
+		providerResult, providerErr := s.rebalanceProvider(ctx, provider, nodes, autoAssign, autoBalance, probeInterval, now, immediate)
 		result.Assigned += providerResult.Assigned
 		result.Rebalanced += providerResult.Rebalanced
 		result.Unplaced += providerResult.Unplaced
@@ -62,7 +75,7 @@ func (s *Service) RebalanceAccounts(ctx context.Context, autoAssign, autoBalance
 	return result, nil
 }
 
-func (s *Service) rebalanceProvider(ctx context.Context, provider accountdomain.Provider, allNodes []domain.Node, autoAssign, autoBalance bool, probeInterval time.Duration, now time.Time) (RebalanceResult, error) {
+func (s *Service) rebalanceProvider(ctx context.Context, provider accountdomain.Provider, allNodes []domain.Node, autoAssign, autoBalance bool, probeInterval time.Duration, now time.Time, immediate bool) (RebalanceResult, error) {
 	accounts, err := s.accounts.ListEgressAssignments(ctx, provider)
 	if err != nil {
 		return RebalanceResult{}, err
@@ -71,9 +84,15 @@ func (s *Service) rebalanceProvider(ctx context.Context, provider accountdomain.
 	if len(nodes) == 0 {
 		return RebalanceResult{Unplaced: countAutoAssignable(accounts, autoAssign, autoBalance)}, nil
 	}
-	nodeShare, migrationShare := s.autoAssignBounds()
-	nodes = capAutomaticAssignmentShare(nodes, accounts, nodeShare)
+	nodeShare, migrationShare := 0.0, 0.0
+	if !immediate {
+		nodeShare, migrationShare = s.autoAssignBounds()
+		nodes = capAutomaticAssignmentShare(nodes, accounts, nodeShare)
+	}
 	migrationLimit := autoAssignmentMigrationLimit(accounts, migrationShare)
+	if immediate {
+		migrationLimit = -1
+	}
 	migrations := 0
 	loads := make(map[uint64]int, len(nodes))
 	byID := make(map[uint64]domain.Node, len(nodes))
@@ -108,7 +127,7 @@ func (s *Service) rebalanceProvider(ctx context.Context, provider accountdomain.
 			// evacuating an entire unhealthy node in one burst.
 			continue
 		}
-		target, found := leastLoadedNode(nodes, loads)
+		target, found := leastLoadedNode(nodes, loads, immediate)
 		if !found {
 			result.Unplaced++
 			continue
@@ -128,9 +147,13 @@ func (s *Service) rebalanceProvider(ctx context.Context, provider accountdomain.
 	// Repair automatic assignments that became over capacity even when ordinary
 	// load balancing is disabled. Manual assignments remain immovable.
 	moves := 0
-	capacityMoveLimit := maxAutomaticReassignments
+	moveCeiling := maxAutomaticReassignments
+	if immediate {
+		moveCeiling = maxImmediateReassignments
+	}
+	capacityMoveLimit := moveCeiling
 	if migrationLimit >= 0 {
-		capacityMoveLimit = min(maxAutomaticReassignments, max(0, migrationLimit-migrations))
+		capacityMoveLimit = min(moveCeiling, max(0, migrationLimit-migrations))
 	}
 	blockedCapacitySources := make(map[uint64]bool)
 	for moves < capacityMoveLimit {
@@ -138,7 +161,7 @@ func (s *Service) rebalanceProvider(ctx context.Context, provider accountdomain.
 		if !found {
 			break
 		}
-		candidateID, movable := findMovableAccount(accounts, assignment, freshMove, source.ID, now)
+		candidateID, movable := findMovableAccount(accounts, assignment, freshMove, source.ID, now, immediate)
 		if !movable {
 			blockedCapacitySources[source.ID] = true
 			continue
@@ -154,11 +177,11 @@ func (s *Service) rebalanceProvider(ctx context.Context, provider accountdomain.
 	if autoBalance {
 		blocked := make(map[uint64]bool)
 		for moves < capacityMoveLimit {
-			source, destination, found := rebalancePair(nodes, loads, blocked)
+			source, destination, found := rebalancePair(nodes, loads, blocked, immediate)
 			if !found {
 				break
 			}
-			candidateID, movable := findMovableAccount(accounts, assignment, freshMove, source.ID, now)
+			candidateID, movable := findMovableAccount(accounts, assignment, freshMove, source.ID, now, immediate)
 			if !movable {
 				blocked[source.ID] = true
 				continue
@@ -289,15 +312,61 @@ func validAutoAssignShare(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && (value == 0 || (value >= 0.05 && value <= 1))
 }
 
+func assignmentProbeFreshness(probeInterval time.Duration) time.Duration {
+	if probeInterval <= 0 {
+		probeInterval = defaultProbeIntervalSeconds * time.Second
+	}
+	return max(probeInterval*2, minAssignmentProbeFreshness)
+}
+
+func (s *Service) assignmentProbeInterval(ctx context.Context) time.Duration {
+	if s == nil || s.operations == nil {
+		return defaultProbeIntervalSeconds * time.Second
+	}
+	config, err := s.operations.GetEgressOperationsConfig(ctx)
+	if err != nil || config.ProbeIntervalSeconds <= 0 {
+		return defaultProbeIntervalSeconds * time.Second
+	}
+	return time.Duration(config.ProbeIntervalSeconds) * time.Second
+}
+
+func (s *Service) assignmentEligible(value domain.Node, now time.Time, probeInterval time.Duration) bool {
+	if !value.Enabled || value.EncryptedProxyURL == "" || value.ProbeStatus != domain.ProbeStatusHealthy || value.LastProbedAt == nil {
+		return false
+	}
+	if now.Sub(value.LastProbedAt.UTC()) > assignmentProbeFreshness(probeInterval) {
+		return false
+	}
+	if value.CooldownUntil != nil && now.Before(value.CooldownUntil.UTC()) && !value.ProxyPool && !s.accountBoundProxy(value) {
+		return false
+	}
+	return true
+}
+
+func (s *Service) markAssignmentDirty() {
+	if s == nil {
+		return
+	}
+	s.assignmentDirty.Store(true)
+}
+
+func (s *Service) rebalanceAccountsIfDirty(ctx context.Context) {
+	if s == nil || s.suppressImmediateRebalance.Load() > 0 {
+		return
+	}
+	if !s.assignmentDirty.CompareAndSwap(true, false) {
+		return
+	}
+	if _, err := s.RebalanceAccountsNow(ctx, true, true, s.assignmentProbeInterval(ctx)); err != nil {
+		s.assignmentDirty.Store(true)
+	}
+}
+
 func (s *Service) eligibleNodesForProvider(values []domain.Node, provider accountdomain.Provider, probeInterval time.Duration, now time.Time) []domain.Node {
 	values = append([]domain.Node(nil), values...)
 	result := make([]domain.Node, 0, len(values))
-	maxAge := max(probeInterval*2, time.Minute)
 	for _, value := range values {
-		if !value.Enabled || value.EncryptedProxyURL == "" || !scopeSupportsProvider(value.Scope, provider) || value.ProbeStatus != domain.ProbeStatusHealthy || value.LastProbedAt == nil || now.Sub(value.LastProbedAt.UTC()) > maxAge {
-			continue
-		}
-		if value.CooldownUntil != nil && now.Before(value.CooldownUntil.UTC()) && !value.ProxyPool && !s.accountBoundProxy(value) {
+		if !scopeSupportsProvider(value.Scope, provider) || !s.assignmentEligible(value, now, probeInterval) {
 			continue
 		}
 		result = append(result, value)
@@ -329,18 +398,18 @@ func countAutoAssignable(values []accountdomain.Credential, autoAssign, autoBala
 	return count
 }
 
-func leastLoadedNode(values []domain.Node, loads map[uint64]int) (domain.Node, bool) {
-	return leastLoadedNodeExcept(values, loads, 0)
+func leastLoadedNode(values []domain.Node, loads map[uint64]int, ignoreCapacity bool) (domain.Node, bool) {
+	return leastLoadedNodeExcept(values, loads, 0, ignoreCapacity)
 }
 
-func leastLoadedNodeExcept(values []domain.Node, loads map[uint64]int, excludedID uint64) (domain.Node, bool) {
+func leastLoadedNodeExcept(values []domain.Node, loads map[uint64]int, excludedID uint64, ignoreCapacity bool) (domain.Node, bool) {
 	var selected domain.Node
 	found := false
 	for _, value := range values {
 		if value.ID == excludedID {
 			continue
 		}
-		if value.AccountCapacity > 0 && loads[value.ID] >= value.AccountCapacity {
+		if !ignoreCapacity && value.AccountCapacity > 0 && loads[value.ID] >= value.AccountCapacity {
 			continue
 		}
 		if !found || loads[value.ID] < loads[selected.ID] || (loads[value.ID] == loads[selected.ID] && value.ID < selected.ID) {
@@ -364,7 +433,7 @@ func overCapacityPair(values []domain.Node, loads map[uint64]int, blocked map[ui
 		if blocked[source.ID] || source.AccountCapacity <= 0 || loads[source.ID] <= source.AccountCapacity {
 			continue
 		}
-		destination, found := leastLoadedNodeExcept(values, loads, source.ID)
+		destination, found := leastLoadedNodeExcept(values, loads, source.ID, false)
 		if found {
 			return source, destination, true
 		}
@@ -372,7 +441,7 @@ func overCapacityPair(values []domain.Node, loads map[uint64]int, blocked map[ui
 	return domain.Node{}, domain.Node{}, false
 }
 
-func rebalancePair(values []domain.Node, loads map[uint64]int, blocked map[uint64]bool) (domain.Node, domain.Node, bool) {
+func rebalancePair(values []domain.Node, loads map[uint64]int, blocked map[uint64]bool, ignoreCapacity bool) (domain.Node, domain.Node, bool) {
 	ordered := append([]domain.Node(nil), values...)
 	sort.Slice(ordered, func(i, j int) bool {
 		if loads[ordered[i].ID] == loads[ordered[j].ID] {
@@ -381,7 +450,7 @@ func rebalancePair(values []domain.Node, loads map[uint64]int, blocked map[uint6
 		return loads[ordered[i].ID] < loads[ordered[j].ID]
 	})
 	for _, destination := range ordered {
-		if destination.AccountCapacity > 0 && loads[destination.ID] >= destination.AccountCapacity {
+		if !ignoreCapacity && destination.AccountCapacity > 0 && loads[destination.ID] >= destination.AccountCapacity {
 			continue
 		}
 		for index := len(ordered) - 1; index >= 0; index-- {
@@ -395,12 +464,12 @@ func rebalancePair(values []domain.Node, loads map[uint64]int, blocked map[uint6
 	return domain.Node{}, domain.Node{}, false
 }
 
-func findMovableAccount(values []accountdomain.Credential, assignment map[uint64]uint64, freshMove map[uint64]bool, sourceID uint64, now time.Time) (uint64, bool) {
+func findMovableAccount(values []accountdomain.Credential, assignment map[uint64]uint64, freshMove map[uint64]bool, sourceID uint64, now time.Time, immediate bool) (uint64, bool) {
 	for _, value := range values {
 		if assignment[value.ID] != sourceID || freshMove[value.ID] || !value.Enabled || value.AuthStatus != accountdomain.AuthStatusActive || value.EgressAssignmentMode != accountdomain.EgressAssignmentAuto {
 			continue
 		}
-		if value.EgressAssignedAt != nil && now.Sub(value.EgressAssignedAt.UTC()) < autoAssignmentMigrationCooldown {
+		if !immediate && value.EgressAssignedAt != nil && now.Sub(value.EgressAssignedAt.UTC()) < autoAssignmentMigrationCooldown {
 			continue
 		}
 		return value.ID, true

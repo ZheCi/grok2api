@@ -3,6 +3,7 @@ package egress
 import (
 	"math"
 	"testing"
+	"time"
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	domain "github.com/chenyme/grok2api/backend/internal/domain/egress"
@@ -78,6 +79,18 @@ func TestAutoAssignmentMigrationLimitPreservesHistoricalCeilingWhenOff(t *testin
 	}
 	if got := autoAssignmentMigrationLimit(makeActiveAccounts(100), 0.10); got != 10 {
 		t.Fatalf("10%% of 100 active accounts = %d", got)
+	}
+}
+
+func TestAssignmentProbeFreshnessKeepsShortIntervalsUsable(t *testing.T) {
+	if got := assignmentProbeFreshness(60 * time.Second); got != 15*time.Minute {
+		t.Fatalf("60s interval freshness = %s, want 15m so probe-all results stay eligible", got)
+	}
+	if got := assignmentProbeFreshness(15 * time.Minute); got != 30*time.Minute {
+		t.Fatalf("15m interval freshness = %s, want 30m", got)
+	}
+	if got := assignmentProbeFreshness(0); got != 30*time.Minute {
+		t.Fatalf("default interval freshness = %s, want 30m", got)
 	}
 }
 

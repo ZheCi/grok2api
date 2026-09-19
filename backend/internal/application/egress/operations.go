@@ -316,13 +316,37 @@ func (s *Service) TestNode(ctx context.Context, id uint64) (domain.ProbeResult, 
 		}
 		return result, updateErr
 	}
+	now := time.Now().UTC()
+	interval := s.assignmentProbeInterval(ctx)
+	if s.assignmentEligible(node, now, interval) != s.assignmentEligible(applyProbeToNode(node, result), now, interval) {
+		s.markAssignmentDirty()
+	}
+	s.rebalanceAccountsIfDirty(ctx)
 	// An unreachable proxy is a completed probe with an unhealthy result, not
 	// an API operation failure. Persistence and repository failures still return
 	// above so callers can distinguish them from node health.
 	return result, nil
 }
 
+func applyProbeToNode(node domain.Node, result domain.ProbeResult) domain.Node {
+	testedAt := result.TestedAt.UTC()
+	node.ProbeStatus = result.Status
+	node.LastProbedAt = &testedAt
+	if result.Status == domain.ProbeStatusHealthy && node.LastError == domain.LastErrorTransport {
+		node.Health = 1
+		node.FailureCount = 0
+		node.CooldownUntil = nil
+		node.LastError = ""
+	}
+	return node
+}
+
 func (s *Service) TestNodes(ctx context.Context, ids []uint64) (ProbeBatchResult, error) {
+	s.suppressImmediateRebalance.Add(1)
+	defer func() {
+		s.suppressImmediateRebalance.Add(-1)
+		s.rebalanceAccountsIfDirty(ctx)
+	}()
 	if len(ids) == 0 {
 		nodes, err := s.repository.ListEgressNodes(ctx, "", repository.SortQuery{})
 		if err != nil {

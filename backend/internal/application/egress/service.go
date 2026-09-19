@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -131,6 +132,8 @@ type Service struct {
 	assignmentMu                sync.Mutex
 	lastAssignmentRun           time.Time
 	assignmentRunning           bool
+	assignmentDirty             atomic.Bool
+	suppressImmediateRebalance  atomic.Int32
 	autoAssignMaxNodeShare      float64
 	autoAssignMaxMigrationShare float64
 }
@@ -510,6 +513,7 @@ func (s *Service) Update(ctx context.Context, id uint64, input Input) (domain.Pu
 	}
 	previousScope := value.Scope
 	previousProxyURL := value.EncryptedProxyURL
+	previousEligible := s.assignmentEligible(value, time.Now().UTC(), s.assignmentProbeInterval(ctx))
 	value, err = s.applyInput(value, input, false)
 	if err != nil {
 		return domain.PublicNode{}, err
@@ -532,6 +536,10 @@ func (s *Service) Update(ctx context.Context, id uint64, input Input) (domain.Pu
 			if clearErr := s.clearQualityLeasesForNodes(ctx, []uint64{updated.ID}); clearErr != nil {
 				return s.publicNode(updated), clearErr
 			}
+		}
+		if previousScope != updated.Scope || previousEligible != s.assignmentEligible(updated, time.Now().UTC(), s.assignmentProbeInterval(ctx)) {
+			s.markAssignmentDirty()
+			s.rebalanceAccountsIfDirty(ctx)
 		}
 	}
 	return s.publicNode(updated), err
@@ -850,6 +858,8 @@ func (s *Service) UpdateManyEnabled(ctx context.Context, nodeIDs []uint64, enabl
 					return updated, clearErr
 				}
 			}
+			s.markAssignmentDirty()
+			s.rebalanceAccountsIfDirty(ctx)
 		}
 		return updated, nil
 	}
@@ -878,6 +888,10 @@ func (s *Service) UpdateManyEnabled(ctx context.Context, nodeIDs []uint64, enabl
 			return updated, err
 		}
 	}
+	if updated > 0 {
+		s.markAssignmentDirty()
+		s.rebalanceAccountsIfDirty(ctx)
+	}
 	return updated, nil
 }
 
@@ -897,6 +911,8 @@ func (s *Service) Delete(ctx context.Context, id uint64) error {
 	if err == nil {
 		s.forgetClearance(id)
 		s.invalidateOperationsConfig()
+		s.markAssignmentDirty()
+		s.rebalanceAccountsIfDirty(ctx)
 	}
 	return err
 }
@@ -918,6 +934,10 @@ func (s *Service) DeleteMany(ctx context.Context, nodeIDs []uint64) (int, error)
 			s.forgetClearance(id)
 		}
 		s.invalidateOperationsConfig()
+		if deleted > 0 {
+			s.markAssignmentDirty()
+			s.rebalanceAccountsIfDirty(ctx)
+		}
 		return deleted, nil
 	}
 
@@ -970,6 +990,8 @@ func (s *Service) DeleteUnhealthy(ctx context.Context) (int, error) {
 		}
 		if len(ids) > 0 {
 			s.invalidateOperationsConfig()
+			s.markAssignmentDirty()
+			s.rebalanceAccountsIfDirty(ctx)
 		}
 		return len(ids), nil
 	}
