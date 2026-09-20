@@ -32,7 +32,8 @@ func TestClassifyQualityHold(t *testing.T) {
 		sig  QualityStreamSignals
 		want QualityVerdict
 	}{
-		{name: "thinking delivers", sig: QualityStreamSignals{HasThinking: true, PlaintextThinking: true, VisibleTokens: 10}, want: QualityDeliver},
+		{name: "thinking stub midstream waits for billed reasoning", sig: QualityStreamSignals{HasThinking: true, PlaintextThinking: true, VisibleTokens: 10}, want: QualityWait},
+		{name: "thinking with billed reasoning delivers", sig: QualityStreamSignals{HasThinking: true, PlaintextThinking: true, VisibleTokens: 10, ReasoningTokens: 40}, want: QualityDeliver},
 		{name: "usage reasoning tokens alone withhold", sig: QualityStreamSignals{ReasoningTokens: 40, VisibleTokens: 80, Terminal: true}, want: QualityWithhold},
 		{name: "visible 32 no think withhold", sig: QualityStreamSignals{VisibleTokens: 32, Terminal: true}, want: QualityWithhold},
 		{name: "output 40 no think withhold", sig: QualityStreamSignals{OutputTokens: 40, Terminal: true}, want: QualityWithhold},
@@ -77,8 +78,13 @@ func TestClassifyQualityHoldBurst(t *testing.T) {
 			want: QualityWait,
 		},
 		{
-			name: "cipher-only visible streamed 2s delivers",
+			name: "cipher-only visible streamed 2s still waits for EOS",
 			sig:  QualityStreamSignals{HasThinking: true, VisibleTokens: 200, ReasoningTokens: 954, EncryptedBytes: 8000, FirstVisible: true, VisibleFlushMS: 2500},
+			want: QualityWait,
+		},
+		{
+			name: "cipher-only billed thinking at terminal delivers",
+			sig:  QualityStreamSignals{HasThinking: true, VisibleTokens: 200, ReasoningTokens: 954, EncryptedBytes: 8000, FirstVisible: true, VisibleFlushMS: 2500, Terminal: true},
 			want: QualityDeliver,
 		},
 		{
@@ -152,9 +158,34 @@ func TestClassifyQualityHoldBurst(t *testing.T) {
 			want: QualityWithhold,
 		},
 		{
-			name: "plaintext thinking with visible still delivers",
+			name: "plaintext stub with visible still waits for billed reasoning",
 			sig:  QualityStreamSignals{HasThinking: true, PlaintextThinking: true, VisibleTokens: 64, ReasoningTokens: 0, EncryptedBytes: 400, HoldExpired: true},
+			want: QualityWait,
+		},
+		{
+			name: "plaintext stub 0-reasoning dump at EOS withholds",
+			sig:  QualityStreamSignals{HasThinking: true, PlaintextThinking: true, VisibleTokens: 334, ReasoningTokens: 0, FirstVisible: true, VisibleFlushMS: 900, Terminal: true},
+			want: QualityWithhold,
+		},
+		{
+			name: "plaintext stub short reply at EOS still delivers",
+			sig:  QualityStreamSignals{HasThinking: true, PlaintextThinking: true, VisibleTokens: 3, ReasoningTokens: 0, Terminal: true},
 			want: QualityDeliver,
+		},
+		{
+			name: "cipher-only 0-reasoning 3.9s flush midstream waits",
+			sig:  QualityStreamSignals{HasThinking: true, VisibleTokens: 226, ReasoningTokens: 0, EncryptedBytes: 800, FirstVisible: true, VisibleFlushMS: 3900},
+			want: QualityWait,
+		},
+		{
+			name: "cipher-only 0-reasoning 3.9s flush at EOS withholds",
+			sig:  QualityStreamSignals{HasThinking: true, VisibleTokens: 226, ReasoningTokens: 0, EncryptedBytes: 800, FirstVisible: true, VisibleFlushMS: 3900, Terminal: true},
+			want: QualityWithhold,
+		},
+		{
+			name: "cipher-only 0-reasoning 23s flush at EOS withholds",
+			sig:  QualityStreamSignals{HasThinking: true, VisibleTokens: 341, ReasoningTokens: 0, EncryptedBytes: 800, FirstVisible: true, VisibleFlushMS: 22995, Terminal: true},
+			want: QualityWithhold,
 		},
 		{
 			name: "cipher-only no visible waits",
@@ -670,6 +701,70 @@ func TestObserveQualityChunkEmptyReasoningStubIsNotThinking(t *testing.T) {
 	}
 }
 
+func TestObserveQualityChunkPlaintextStubZeroReasoningWithholds(t *testing.T) {
+	t.Parallel()
+	content := strings.Repeat("word ", 40)
+	mid := qualityScanState{protocol: qualityProtocolResponses}
+	ObserveQualityChunk(&mid, []byte(sse(
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"I already applied the review fixes."}`,
+		`data: {"type":"response.output_text.delta","delta":"`+content+`"}`,
+	)))
+	midSig := mid.signals()
+	if !midSig.HasThinking || !midSig.PlaintextThinking || midSig.ReasoningTokens != 0 {
+		t.Fatalf("midstream stub summary signals = %#v", midSig)
+	}
+	if ClassifyQualityHold(midSig, 32) != QualityWait {
+		t.Fatalf("stub summary without billed reasoning must wait, got %s (%#v)", ClassifyQualityHold(midSig, 32), midSig)
+	}
+
+	done := qualityScanState{protocol: qualityProtocolResponses}
+	ObserveQualityChunk(&done, []byte(sse(
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"I already applied the review fixes."}`,
+		`data: {"type":"response.output_text.delta","delta":"`+content+`"}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"output_tokens":334,"output_tokens_details":{"reasoning_tokens":0}}}}`,
+	)))
+	doneSig := done.signals()
+	if !doneSig.HasThinking || !doneSig.PlaintextThinking || doneSig.ReasoningTokens != 0 || !doneSig.Terminal {
+		t.Fatalf("EOS stub summary signals = %#v", doneSig)
+	}
+	if ClassifyQualityHold(doneSig, 32) != QualityWithhold {
+		t.Fatalf("stub summary + 0 reasoning + enough visible must withhold, got %s (%#v)", ClassifyQualityHold(doneSig, 32), doneSig)
+	}
+}
+
+func TestObserveQualityChunkCipherZeroReasoningWaitsThenWithholds(t *testing.T) {
+	t.Parallel()
+	cipher := strings.Repeat("A", defaultMinEncryptedBytes)
+	content := strings.Repeat("word ", 40)
+	mid := qualityScanState{protocol: qualityProtocolResponses}
+	ObserveQualityChunk(&mid, []byte(sse(
+		`data: {"type":"response.output_item.done","item":{"id":"rs_1","type":"reasoning","encrypted_content":"`+cipher+`"}}`,
+		`data: {"type":"response.output_text.delta","delta":"`+content+`"}`,
+	)))
+	mid.firstVisibleAt = time.Now().Add(-3900 * time.Millisecond)
+	midSig := mid.signals()
+	if !midSig.HasThinking || midSig.PlaintextThinking || midSig.ReasoningTokens != 0 || midSig.VisibleFlushMS < 2000 {
+		t.Fatalf("midstream cipher-only signals = %#v", midSig)
+	}
+	if ClassifyQualityHold(midSig, 8) != QualityWait {
+		t.Fatalf("cipher-only 0-reasoning must not release at 2s visible, got %s (%#v)", ClassifyQualityHold(midSig, 8), midSig)
+	}
+
+	done := qualityScanState{protocol: qualityProtocolResponses}
+	ObserveQualityChunk(&done, []byte(sse(
+		`data: {"type":"response.output_item.done","item":{"id":"rs_1","type":"reasoning","encrypted_content":"`+cipher+`"}}`,
+		`data: {"type":"response.output_text.delta","delta":"`+content+`"}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"output_tokens":226,"output_tokens_details":{"reasoning_tokens":0}}}}`,
+	)))
+	doneSig := done.signals()
+	if !doneSig.HasThinking || doneSig.PlaintextThinking || doneSig.ReasoningTokens != 0 || !doneSig.Terminal {
+		t.Fatalf("EOS cipher-only 0-reasoning signals = %#v", doneSig)
+	}
+	if ClassifyQualityHold(doneSig, 8) != QualityWithhold {
+		t.Fatalf("cipher-only 0-reasoning at EOS must withhold, got %s (%#v)", ClassifyQualityHold(doneSig, 8), doneSig)
+	}
+}
+
 func TestPeekQualityStreamThinkingDeliversRemainder(t *testing.T) {
 	t.Parallel()
 	body := io.NopCloser(strings.NewReader(sse(
@@ -709,6 +804,50 @@ func TestPeekQualityStreamWithholdsNoThinkEnough(t *testing.T) {
 		t.Fatalf("verdict=%s usage=%#v", verdict, usage)
 	}
 	if usage.ReasoningTokens != 0 || usage.OutputTokens < 32 {
+		t.Fatalf("usage=%#v", usage)
+	}
+}
+
+func TestPeekQualityStreamPlaintextStubZeroReasoningWithholds(t *testing.T) {
+	t.Parallel()
+	content := strings.Repeat("abcd", 40)
+	body := io.NopCloser(strings.NewReader(sse(
+		`data: {"choices":[{"delta":{"thinking_content":"already applied the review fixes"}}]}`,
+		`data: {"choices":[{"delta":{"content":"`+content+`"}}]}`,
+		`data: {"usage":{"completion_tokens":334,"completion_tokens_details":{"reasoning_tokens":0}}}`,
+		"data: [DONE]",
+	)))
+	replay, verdict, usage, _, err := peekQualityStream(context.Background(), body, qualityProtocolChat, QualityRetryRuntime{MinOutputTokens: 32, HoldTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replay.Close()
+	if verdict != QualityWithhold {
+		t.Fatalf("verdict=%s usage=%#v", verdict, usage)
+	}
+	if usage.ReasoningTokens != 0 {
+		t.Fatalf("usage=%#v", usage)
+	}
+}
+
+func TestPeekQualityStreamCipherZeroReasoningWithholds(t *testing.T) {
+	t.Parallel()
+	cipher := strings.Repeat("A", defaultMinEncryptedBytes)
+	content := strings.Repeat("abcd", 40)
+	body := io.NopCloser(strings.NewReader(sse(
+		`data: {"type":"response.output_item.done","item":{"id":"rs_1","type":"reasoning","encrypted_content":"`+cipher+`"}}`,
+		`data: {"type":"response.output_text.delta","delta":"`+content+`"}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","usage":{"output_tokens":226,"output_tokens_details":{"reasoning_tokens":0}}}}`,
+	)))
+	replay, verdict, usage, _, err := peekQualityStream(context.Background(), body, qualityProtocolResponses, QualityRetryRuntime{MinOutputTokens: 8, HoldTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replay.Close()
+	if verdict != QualityWithhold {
+		t.Fatalf("verdict=%s usage=%#v", verdict, usage)
+	}
+	if usage.ReasoningTokens != 0 {
 		t.Fatalf("usage=%#v", usage)
 	}
 }

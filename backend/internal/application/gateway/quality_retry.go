@@ -256,6 +256,15 @@ func qualityIsCipherDrool(sig QualityStreamSignals, minOutput int64) bool {
 	return false
 }
 
+// qualityVisibleOutput prefers streamed content over usage.output, which
+// often still includes reasoning tokens on chat completions.
+func qualityVisibleOutput(sig QualityStreamSignals) int64 {
+	if sig.VisibleTokens > 0 {
+		return sig.VisibleTokens
+	}
+	return sig.OutputTokens
+}
+
 // ClassifyQualityHold decides whether a held stream may be forwarded.
 func ClassifyQualityHold(sig QualityStreamSignals, minOutput int64) QualityVerdict {
 	if minOutput <= 0 {
@@ -266,16 +275,28 @@ func ClassifyQualityHold(sig QualityStreamSignals, minOutput int64) QualityVerdi
 	}
 	if sig.HasThinking {
 		if sig.PlaintextThinking {
+			if sig.ReasoningTokens > 0 {
+				return QualityDeliver
+			}
+			// A summary/thinking delta with usage.reasoning_tokens=0 is a stub,
+			// not billed thinking. Do not golden-ticket deliver; wait for usage
+			// or EOS, then withhold if there is already enough visible text.
+			if !sig.Terminal {
+				return QualityWait
+			}
+			output := qualityVisibleOutput(sig)
+			if output <= 0 {
+				return QualityWait
+			}
+			if output >= minOutput {
+				return QualityWithhold
+			}
 			return QualityDeliver
 		}
-		// Cipher-only: do not release when encrypted_content first meets
-		// the floor. Fake dumps send the blob, then the whole answer in
-		// <2s; releasing early lets that dump bypass fake-enc. Wait until
-		// visible text has streamed for 2s, or the stream ends.
+		// Cipher-only: never release after 2s of visible text. Fake dumps
+		// with a floor-sized blob and 0 billed reasoning need EOS so
+		// cipherDrool / fake-enc can see usage.reasoning_tokens.
 		if sig.Terminal {
-			return QualityDeliver
-		}
-		if sig.VisibleTokens >= minOutput && sig.FirstVisible && sig.VisibleFlushMS >= defaultFakeEncFlushMS {
 			return QualityDeliver
 		}
 		return QualityWait
@@ -284,10 +305,7 @@ func ClassifyQualityHold(sig QualityStreamSignals, minOutput int64) QualityVerdi
 	// tokens, which are deliberately not trusted as quality evidence above. If
 	// the stream exposed no visible count at all, retain OutputTokens as a
 	// compatibility fallback for terminal usage-only responses.
-	output := sig.VisibleTokens
-	if output <= 0 {
-		output = sig.OutputTokens
-	}
+	output := qualityVisibleOutput(sig)
 	enough := output >= minOutput
 	if sig.ReasoningStarted && !sig.Terminal && !sig.HoldExpired {
 		return QualityWait
