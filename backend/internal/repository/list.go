@@ -84,13 +84,23 @@ type AccountListFilter struct {
 	Agreement string
 	// Association filters accounts by link-table bindings: grok_web supports
 	// build/console/all values; grok_build and grok_console support webLinked/webUnlinked.
-	Association string
-	AccountIDs  []uint64
-	RestrictIDs bool
-	ExcludeIDs  []uint64
-	AfterID     uint64
-	ThroughID   uint64
-	Now         time.Time
+	Association   string
+	CallCountMin  *int
+	CallCountMax  *int
+	FailStreakMin *int
+	FailStreakMax *int
+	FailRateMin   *float64
+	FailRateMax   *float64
+	SoftTPS       *float64
+	HardTPS       *float64
+	MinGenMS      *int64
+	FailClosed    *bool
+	AccountIDs    []uint64
+	RestrictIDs   bool
+	ExcludeIDs    []uint64
+	AfterID       uint64
+	ThroughID     uint64
+	Now           time.Time
 }
 
 type AccountListQuery struct {

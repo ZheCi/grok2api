@@ -20,6 +20,12 @@ func TestListRejectsInvalidWebFilters(t *testing.T) {
 		{name: "association without provider", filter: ListFilter{Association: "webLinked"}},
 		{name: "invalid agreement", filter: ListFilter{Provider: string(accountdomain.ProviderWeb), Agreement: "invalid"}},
 		{name: "invalid association", filter: ListFilter{Provider: string(accountdomain.ProviderWeb), Association: "invalid"}},
+		{name: "negative call count", filter: ListFilter{CallCountMax: intPtr(-1)}},
+		{name: "call count above window", filter: ListFilter{CallCountMax: intPtr(33)}},
+		{name: "inverted call count range", filter: ListFilter{CallCountMin: intPtr(5), CallCountMax: intPtr(1)}},
+		{name: "negative fail streak", filter: ListFilter{FailStreakMin: intPtr(-1)}},
+		{name: "fail rate above 100", filter: ListFilter{FailRateMax: floatPtr(101)}},
+		{name: "inverted fail rate range", filter: ListFilter{FailRateMin: floatPtr(80), FailRateMax: floatPtr(10)}},
 	}
 
 	service := &Service{}
@@ -106,3 +112,7 @@ func TestListRejectsInvalidEgressFilter(t *testing.T) {
 		}
 	}
 }
+
+func intPtr(value int) *int { return &value }
+
+func floatPtr(value float64) *float64 { return &value }

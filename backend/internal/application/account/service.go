@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"slices"
@@ -315,8 +316,18 @@ type ListFilter struct {
 	Agreement string
 	// Association values are provider-specific: Web supports build, console, and combined filters;
 	// Build and Console support only webLinked and webUnlinked.
-	Association string
-	Sort        repository.SortQuery
+	Association   string
+	CallCountMin  *int
+	CallCountMax  *int
+	FailStreakMin *int
+	FailStreakMax *int
+	FailRateMin   *float64
+	FailRateMax   *float64
+	SoftTPS       *float64
+	HardTPS       *float64
+	MinGenMS      *int64
+	FailClosed    *bool
+	Sort          repository.SortQuery
 }
 
 type Summary struct {
@@ -558,6 +569,7 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 		!oneOf(filter.Agreement, "", "nsfwEnabled", "nsfwDisabled", "termsAccepted", "termsNotAccepted", "allAccepted", "allNotAccepted") ||
 		(filter.Agreement != "" && filter.Provider != string(accountdomain.ProviderWeb)) ||
 		!validAssociationFilter(filter.Provider, filter.Association) ||
+		!validCallQualityMetrics(filter) ||
 		!repository.IsValidSort(filter.Sort, "name", "type", "status", "createdAt") {
 		return nil, 0, ErrInvalidFilter
 	}
@@ -569,7 +581,12 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 	repositoryFilter := repository.AccountListFilter{
 		Provider: filter.Provider, QuotaType: filter.QuotaType, Status: filter.Status, Egress: egressMode,
 		EgressNodeID: egressNodeID, EgressSourceID: egressSourceID,
-		Refreshable: refreshable, Agreement: filter.Agreement, Association: filter.Association, Now: s.now(),
+		Refreshable: refreshable, Agreement: filter.Agreement, Association: filter.Association,
+		CallCountMin: filter.CallCountMin, CallCountMax: filter.CallCountMax,
+		FailStreakMin: filter.FailStreakMin, FailStreakMax: filter.FailStreakMax,
+		FailRateMin: filter.FailRateMin, FailRateMax: filter.FailRateMax,
+		SoftTPS: filter.SoftTPS, HardTPS: filter.HardTPS, MinGenMS: filter.MinGenMS, FailClosed: filter.FailClosed,
+		Now: s.now(),
 	}
 	if filter.Risk != "" {
 		if _, ok := s.accounts.(buildBotFlagIndexRepository); ok {
@@ -772,6 +789,36 @@ func oneOf(value string, allowed ...string) bool {
 		}
 	}
 	return false
+}
+
+func validCallQualityMetrics(filter ListFilter) bool {
+	if !validCallQualityCount(filter.CallCountMin) || !validCallQualityCount(filter.CallCountMax) {
+		return false
+	}
+	if !validCallQualityCount(filter.FailStreakMin) || !validCallQualityCount(filter.FailStreakMax) {
+		return false
+	}
+	if !validCallQualityRate(filter.FailRateMin) || !validCallQualityRate(filter.FailRateMax) {
+		return false
+	}
+	if filter.CallCountMin != nil && filter.CallCountMax != nil && *filter.CallCountMin > *filter.CallCountMax {
+		return false
+	}
+	if filter.FailStreakMin != nil && filter.FailStreakMax != nil && *filter.FailStreakMin > *filter.FailStreakMax {
+		return false
+	}
+	if filter.FailRateMin != nil && filter.FailRateMax != nil && *filter.FailRateMin > *filter.FailRateMax {
+		return false
+	}
+	return true
+}
+
+func validCallQualityCount(value *int) bool {
+	return value == nil || (*value >= 0 && *value <= 32)
+}
+
+func validCallQualityRate(value *float64) bool {
+	return value == nil || (!math.IsNaN(*value) && !math.IsInf(*value, 0) && *value >= 0 && *value <= 100)
 }
 
 // validAssociationFilter validates association filters against the selected provider.

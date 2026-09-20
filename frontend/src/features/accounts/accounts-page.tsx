@@ -144,6 +144,12 @@ export function AccountsPage() {
   const [riskFilter, setRiskFilter] = useState("");
   const [agreementFilter, setAgreementFilter] = useState("");
   const [associationFilter, setAssociationFilter] = useState("");
+  const [callCountMinFilter, setCallCountMinFilter] = useState("");
+  const [callCountMaxFilter, setCallCountMaxFilter] = useState("");
+  const [failStreakMinFilter, setFailStreakMinFilter] = useState("");
+  const [failStreakMaxFilter, setFailStreakMaxFilter] = useState("");
+  const [failRateMinFilter, setFailRateMinFilter] = useState("");
+  const [failRateMaxFilter, setFailRateMaxFilter] = useState("");
   const [callStatusAccount, setCallStatusAccount] = useState<{ id: string; label: string } | null>(null);
   const [sort, setSort] = useState<TableSort>({ field: "createdAt", order: "desc" });
   const [selection, setSelection] = useState<AccountSelection>(() => ({ provider: "grok_build", ids: new Set() }));
@@ -200,6 +206,18 @@ export function AccountsPage() {
   const [webConfirmationTarget, setWebConfirmationTarget] = useState<WebAccountConfirmationTarget | null>(null);
   const debouncedSearch = useDebouncedValue(search);
   const debouncedEgressFilterOptionsSearch = useDebouncedValue(egressFilterOptionsSearch);
+  const debouncedCallCountMinFilter = useDebouncedValue(callCountMinFilter);
+  const debouncedCallCountMaxFilter = useDebouncedValue(callCountMaxFilter);
+  const debouncedFailStreakMinFilter = useDebouncedValue(failStreakMinFilter);
+  const debouncedFailStreakMaxFilter = useDebouncedValue(failStreakMaxFilter);
+  const debouncedFailRateMinFilter = useDebouncedValue(failRateMinFilter);
+  const debouncedFailRateMaxFilter = useDebouncedValue(failRateMaxFilter);
+  const callCountMin = parseAccountCallCountFilter(debouncedCallCountMinFilter);
+  const callCountMax = parseAccountCallCountFilter(debouncedCallCountMaxFilter);
+  const failStreakMin = parseAccountCallCountFilter(debouncedFailStreakMinFilter);
+  const failStreakMax = parseAccountCallCountFilter(debouncedFailStreakMaxFilter);
+  const failRateMin = parseAccountFailRateFilter(debouncedFailRateMinFilter);
+  const failRateMax = parseAccountFailRateFilter(debouncedFailRateMaxFilter);
 
   useEffect(() => () => {
     quotaSyncAbortRef.current?.abort();
@@ -246,13 +264,15 @@ export function AccountsPage() {
   const callStatusThresholds = qualityGuardCallStatusThresholds(qualityGuardQuery.data);
 
   const accountsQuery = useQuery({
-    queryKey: ["accounts", provider, page, pageSize, debouncedSearch, typeFilter, statusFilter, egressFilter, renewalFilter, riskFilter, agreementFilter, associationFilter, sort.field, sort.order],
+    queryKey: ["accounts", provider, page, pageSize, debouncedSearch, typeFilter, statusFilter, egressFilter, renewalFilter, riskFilter, agreementFilter, associationFilter, callCountMin, callCountMax, failStreakMin, failStreakMax, failRateMin, failRateMax, callStatusThresholds?.softTPS, callStatusThresholds?.hardTPS, callStatusThresholds?.minGenMs, callStatusThresholds?.failClosed, sort.field, sort.order],
     queryFn: () => listAccounts({
       provider, page, pageSize, search: debouncedSearch, type: typeFilter, status: statusFilter, egress: egressFilter,
       renewal: provider === "grok_build" ? renewalFilter : undefined,
       risk: provider === "grok_build" ? riskFilter : undefined,
       agreement: provider === "grok_web" ? agreementFilter : undefined,
       association: associationFilter || undefined,
+      callCountMin, callCountMax, failStreakMin, failStreakMax, failRateMin, failRateMax,
+      softTPS: callStatusThresholds?.softTPS, hardTPS: callStatusThresholds?.hardTPS, minGenMs: callStatusThresholds?.minGenMs, failClosed: callStatusThresholds?.failClosed,
       sortBy: sort.field, sortOrder: sort.order,
     }),
   });
@@ -1038,6 +1058,12 @@ export function AccountsPage() {
     setRiskFilter("");
     setAgreementFilter("");
     setAssociationFilter("");
+    setCallCountMinFilter("");
+    setCallCountMaxFilter("");
+    setFailStreakMinFilter("");
+    setFailStreakMaxFilter("");
+    setFailRateMinFilter("");
+    setFailRateMaxFilter("");
     setCallStatusAccount(null);
     setQuickImportOpen(false);
     setQuickImportTokens("");
@@ -1436,6 +1462,18 @@ export function AccountsPage() {
                   { value: "webLinked", label: t("accounts.associationWebLinked") },
                   { value: "webUnlinked", label: t("accounts.associationWebUnlinked") },
                 ] },
+                { id: "callQuality", type: "range-group", label: t("accounts.callQualityFilter"),
+                  selectedLabel: [
+                    formatAccountRangeLabel(callCountMinFilter, callCountMaxFilter),
+                    formatAccountRangeLabel(failStreakMinFilter, failStreakMaxFilter),
+                    formatAccountRangeLabel(failRateMinFilter, failRateMaxFilter, "%"),
+                  ].filter(Boolean).join(" · ") || undefined,
+                  fields: [
+                    { id: "callCount", label: t("accounts.callCountMaxFilter"), minValue: callCountMinFilter, maxValue: callCountMaxFilter, min: 0, max: 32, step: 1, onMinChange: (value) => { setCallCountMinFilter(sanitizeAccountCountInput(value)); setPage(1); }, onMaxChange: (value) => { setCallCountMaxFilter(sanitizeAccountCountInput(value)); setPage(1); } },
+                    { id: "failStreak", label: t("accounts.failStreakMinFilter"), minValue: failStreakMinFilter, maxValue: failStreakMaxFilter, min: 0, max: 32, step: 1, onMinChange: (value) => { setFailStreakMinFilter(sanitizeAccountCountInput(value)); setPage(1); }, onMaxChange: (value) => { setFailStreakMaxFilter(sanitizeAccountCountInput(value)); setPage(1); } },
+                    { id: "failRate", label: t("accounts.failRateMinFilter"), minValue: failRateMinFilter, maxValue: failRateMaxFilter, unit: "%", min: 0, max: 100, step: 1, onMinChange: (value) => { setFailRateMinFilter(sanitizeAccountRateInput(value)); setPage(1); }, onMaxChange: (value) => { setFailRateMaxFilter(sanitizeAccountRateInput(value)); setPage(1); } },
+                  ],
+                },
               ]} />
             </div>
             {selected.size > 0 ? (
@@ -2475,6 +2513,41 @@ function formatAdditionalRefreshErrorDetails(account: AccountDTO): string | unde
   } catch {
     return response;
   }
+}
+
+function formatAccountRangeLabel(min: string, max: string, unit = ""): string {
+  if (min !== "" && max !== "") return `${min}–${max}${unit}`;
+  if (min !== "") return `≥${min}${unit}`;
+  if (max !== "") return `≤${max}${unit}`;
+  return "";
+}
+
+function sanitizeAccountCountInput(value: string): string {
+  if (value === "") return "";
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return "";
+  return String(Math.min(32, Math.max(0, parsed)));
+}
+
+function sanitizeAccountRateInput(value: string): string {
+  if (value === "") return "";
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) return "";
+  return String(Math.min(100, Math.max(0, parsed)));
+}
+
+function parseAccountCallCountFilter(value: string): number | undefined {
+  if (value === "") return undefined;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 32) return undefined;
+  return parsed;
+}
+
+function parseAccountFailRateFilter(value: string): number | undefined {
+  if (value === "") return undefined;
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return undefined;
+  return parsed;
 }
 
 function StatusTooltip({ children, content }: { children: ReactNode; content: ReactNode }) {

@@ -280,56 +280,56 @@ type accountImportResponse struct {
 }
 
 type accountResponse struct {
-	ID                         uint64                  `json:"id,string"`
-	Provider                   string                  `json:"provider"`
-	AuthType                   string                  `json:"authType"`
-	WebTier                    string                  `json:"webTier,omitempty"`
-	WebTierSyncedAt            *time.Time              `json:"webTierSyncedAt,omitempty"`
-	WebNSFWEnabledAt           *time.Time              `json:"nsfwEnabledAt,omitempty"`
-	WebTermsAcceptedAt         *time.Time              `json:"termsAcceptedAt,omitempty"`
-	Name                       string                  `json:"name"`
-	Email                      string                  `json:"email,omitempty"`
-	UserID                     string                  `json:"userId,omitempty"`
-	TeamID                     string                  `json:"teamId,omitempty"`
-	Enabled                    bool                    `json:"enabled"`
-	AuthStatus                 string                  `json:"authStatus"`
-	ExpiresAt                  *time.Time              `json:"expiresAt,omitempty"`
-	Refreshable                bool                    `json:"refreshable"`
-	RefreshDueAt               *time.Time              `json:"refreshDueAt,omitempty"`
-	LastRefreshAt              *time.Time              `json:"lastRefreshAt,omitempty"`
-	RefreshFailures            int                     `json:"refreshFailureCount"`
-	LastRefreshErrorStatus     int                     `json:"lastRefreshErrorStatus,omitempty"`
-	LastRefreshError           string                  `json:"lastRefreshErrorCode,omitempty"`
-	LastRefreshErrorMessage    string                  `json:"lastRefreshErrorMessage,omitempty"`
-	LastRefreshErrorResponse   string                  `json:"lastRefreshErrorResponse,omitempty"`
-	Priority                   int                     `json:"priority"`
-	MaxConcurrent              int                     `json:"maxConcurrent"`
-	MinimumRemaining           float64                 `json:"minimumRemaining"`
-	FailureCount               int                     `json:"failureCount"`
-	CooldownUntil              *time.Time              `json:"cooldownUntil,omitempty"`
-	LastError                  string                  `json:"lastError,omitempty"`
+	ID                       uint64     `json:"id,string"`
+	Provider                 string     `json:"provider"`
+	AuthType                 string     `json:"authType"`
+	WebTier                  string     `json:"webTier,omitempty"`
+	WebTierSyncedAt          *time.Time `json:"webTierSyncedAt,omitempty"`
+	WebNSFWEnabledAt         *time.Time `json:"nsfwEnabledAt,omitempty"`
+	WebTermsAcceptedAt       *time.Time `json:"termsAcceptedAt,omitempty"`
+	Name                     string     `json:"name"`
+	Email                    string     `json:"email,omitempty"`
+	UserID                   string     `json:"userId,omitempty"`
+	TeamID                   string     `json:"teamId,omitempty"`
+	Enabled                  bool       `json:"enabled"`
+	AuthStatus               string     `json:"authStatus"`
+	ExpiresAt                *time.Time `json:"expiresAt,omitempty"`
+	Refreshable              bool       `json:"refreshable"`
+	RefreshDueAt             *time.Time `json:"refreshDueAt,omitempty"`
+	LastRefreshAt            *time.Time `json:"lastRefreshAt,omitempty"`
+	RefreshFailures          int        `json:"refreshFailureCount"`
+	LastRefreshErrorStatus   int        `json:"lastRefreshErrorStatus,omitempty"`
+	LastRefreshError         string     `json:"lastRefreshErrorCode,omitempty"`
+	LastRefreshErrorMessage  string     `json:"lastRefreshErrorMessage,omitempty"`
+	LastRefreshErrorResponse string     `json:"lastRefreshErrorResponse,omitempty"`
+	Priority                 int        `json:"priority"`
+	MaxConcurrent            int        `json:"maxConcurrent"`
+	MinimumRemaining         float64    `json:"minimumRemaining"`
+	FailureCount             int        `json:"failureCount"`
+	CooldownUntil            *time.Time `json:"cooldownUntil,omitempty"`
+	LastError                string     `json:"lastError,omitempty"`
 	// EnabledDoesNotClearCooldown is set on PATCH when enabled was changed
 	// while the account is still cooling. Toggling enabled is not a health reset.
-	EnabledDoesNotClearCooldown bool `json:"enabledDoesNotClearCooldown,omitempty"`
-	LastUsedAt                 *time.Time              `json:"lastUsedAt,omitempty"`
-	LinkedAccountID            uint64                  `json:"linkedAccountId,omitempty,string"`
-	LinkedName                 string                  `json:"linkedAccountName,omitempty"`
-	LinkedProvider             string                  `json:"linkedProvider,omitempty"`
-	LinkedAccounts             []linkedAccountResponse `json:"linkedAccounts,omitempty"`
-	CreatedAt                  time.Time               `json:"createdAt"`
-	ObservedModel              string                  `json:"observedModel,omitempty"`
-	ObservedModelAt            *time.Time              `json:"observedModelAt,omitempty"`
-	CloudflareCookieConfigured bool                    `json:"cloudflareCookieConfigured"`
-	BuildSuperEntitled         bool                    `json:"buildSuperEntitled"`
-	BuildRouteMode             string                  `json:"buildRouteMode"`
-	BuildBotFlagged            bool                    `json:"buildBotFlagged"`
-	BuildBotFlagSource         int                     `json:"buildBotFlagSource,omitempty"`
-	EgressNodeID               uint64                  `json:"egressNodeId,omitempty,string"`
-	EgressAssignmentMode       string                  `json:"egressAssignmentMode,omitempty"`
-	ModelSyncFailed            bool                    `json:"modelSyncFailed,omitempty"`
-	Billing                    *billingResponse        `json:"billing,omitempty"`
-	Quota                      quotaResponse           `json:"quota"`
-	QuotaWindows               []quotaWindowResponse   `json:"quotaWindows,omitempty"`
+	EnabledDoesNotClearCooldown bool                    `json:"enabledDoesNotClearCooldown,omitempty"`
+	LastUsedAt                  *time.Time              `json:"lastUsedAt,omitempty"`
+	LinkedAccountID             uint64                  `json:"linkedAccountId,omitempty,string"`
+	LinkedName                  string                  `json:"linkedAccountName,omitempty"`
+	LinkedProvider              string                  `json:"linkedProvider,omitempty"`
+	LinkedAccounts              []linkedAccountResponse `json:"linkedAccounts,omitempty"`
+	CreatedAt                   time.Time               `json:"createdAt"`
+	ObservedModel               string                  `json:"observedModel,omitempty"`
+	ObservedModelAt             *time.Time              `json:"observedModelAt,omitempty"`
+	CloudflareCookieConfigured  bool                    `json:"cloudflareCookieConfigured"`
+	BuildSuperEntitled          bool                    `json:"buildSuperEntitled"`
+	BuildRouteMode              string                  `json:"buildRouteMode"`
+	BuildBotFlagged             bool                    `json:"buildBotFlagged"`
+	BuildBotFlagSource          int                     `json:"buildBotFlagSource,omitempty"`
+	EgressNodeID                uint64                  `json:"egressNodeId,omitempty,string"`
+	EgressAssignmentMode        string                  `json:"egressAssignmentMode,omitempty"`
+	ModelSyncFailed             bool                    `json:"modelSyncFailed,omitempty"`
+	Billing                     *billingResponse        `json:"billing,omitempty"`
+	Quota                       quotaResponse           `json:"quota"`
+	QuotaWindows                []quotaWindowResponse   `json:"quotaWindows,omitempty"`
 }
 
 type linkedAccountResponse struct {
@@ -413,9 +413,26 @@ type quotaResponse struct {
 
 func (h *Handler) list(c *gin.Context) {
 	page, pageSize := pagination(c)
+	callCountMin, callCountMinOK := queryOptionalInt(c, "callCountMin")
+	callCountMax, callCountMaxOK := queryOptionalInt(c, "callCountMax")
+	failStreakMin, failStreakMinOK := queryOptionalInt(c, "failStreakMin")
+	failStreakMax, failStreakMaxOK := queryOptionalInt(c, "failStreakMax")
+	failRateMin, failRateMinOK := queryOptionalFloat(c, "failRateMin")
+	failRateMax, failRateMaxOK := queryOptionalFloat(c, "failRateMax")
+	softTPS, softTPSOK := queryOptionalFloat(c, "softTPS")
+	hardTPS, hardTPSOK := queryOptionalFloat(c, "hardTPS")
+	minGenMS, minGenMSOK := queryOptionalInt64(c, "minGenMS")
+	failClosed, failClosedOK := queryOptionalBool(c, "failClosed")
+	if !callCountMinOK || !callCountMaxOK || !failStreakMinOK || !failStreakMaxOK || !failRateMinOK || !failRateMaxOK || !softTPSOK || !hardTPSOK || !minGenMSOK || !failClosedOK {
+		response.Error(c, http.StatusBadRequest, "invalidFilter", "调用质量筛选无效")
+		return
+	}
 	values, total, err := h.service.List(c.Request.Context(), page, pageSize, c.Query("search"), accountapp.ListFilter{
 		Provider: c.Query("provider"), QuotaType: c.Query("type"), Status: c.Query("status"), Egress: c.Query("egress"),
 		Renewal: c.Query("renewal"), Risk: c.Query("risk"), Agreement: c.Query("agreement"), Association: c.Query("association"),
+		CallCountMin: callCountMin, CallCountMax: callCountMax, FailStreakMin: failStreakMin, FailStreakMax: failStreakMax,
+		FailRateMin: failRateMin, FailRateMax: failRateMax,
+		SoftTPS: softTPS, HardTPS: hardTPS, MinGenMS: minGenMS, FailClosed: failClosed,
 		Sort: repository.SortQuery{Field: c.Query("sortBy"), Direction: repository.SortDirection(c.Query("sortOrder"))},
 	})
 	if errors.Is(err, accountapp.ErrInvalidFilter) {
@@ -1577,6 +1594,54 @@ func pagination(c *gin.Context) (int, int) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	size, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
 	return repository.NormalizePage(page, size, repository.DefaultPageSize)
+}
+
+func queryOptionalInt(c *gin.Context, name string) (*int, bool) {
+	raw := strings.TrimSpace(c.Query(name))
+	if raw == "" {
+		return nil, true
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return nil, false
+	}
+	return &value, true
+}
+
+func queryOptionalFloat(c *gin.Context, name string) (*float64, bool) {
+	raw := strings.TrimSpace(c.Query(name))
+	if raw == "" {
+		return nil, true
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return nil, false
+	}
+	return &value, true
+}
+
+func queryOptionalInt64(c *gin.Context, name string) (*int64, bool) {
+	raw := strings.TrimSpace(c.Query(name))
+	if raw == "" {
+		return nil, true
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return nil, false
+	}
+	return &value, true
+}
+
+func queryOptionalBool(c *gin.Context, name string) (*bool, bool) {
+	raw := strings.TrimSpace(c.Query(name))
+	if raw == "" {
+		return nil, true
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return nil, false
+	}
+	return &value, true
 }
 
 func pathID(c *gin.Context) (uint64, bool) {

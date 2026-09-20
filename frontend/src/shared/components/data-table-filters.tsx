@@ -48,8 +48,80 @@ type DataTableTextFilter = {
   type: "text";
 };
 
-export type DataTableFilter = DataTableOptionFilter | DataTableTextFilter;
+type DataTableRangeField = {
+  id: string;
+  label: string;
+  minValue: string;
+  maxValue: string;
+  unit?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  onMinChange: (value: string) => void;
+  onMaxChange: (value: string) => void;
+};
+
+type DataTableRangeGroupFilter = {
+  id: string;
+  label: string;
+  fields: DataTableRangeField[];
+  selectedLabel?: string;
+  type: "range-group";
+};
+
+export type DataTableFilter = DataTableOptionFilter | DataTableTextFilter | DataTableRangeGroupFilter;
 export type { DataTableFilterOption, DataTableFilterOptionGroup };
+
+function filterIsActive(filter: DataTableFilter): boolean {
+  if ("type" in filter && filter.type === "range-group") return filter.fields.some((field) => field.minValue !== "" || field.maxValue !== "");
+  return filter.value !== "";
+}
+
+function RangeFilterField({ field }: { field: DataTableRangeField }) {
+  const { t } = useTranslation();
+  return (
+    <fieldset className="grid gap-1">
+      <legend className="text-[11px] text-muted-foreground">{field.label}</legend>
+      <div className="flex items-center gap-1.5">
+        <Input
+          id={`table-filter-${field.id}-min`}
+          type="number"
+          inputMode="decimal"
+          className="h-8 min-w-0 flex-1 text-xs"
+          value={field.minValue}
+          min={field.min}
+          max={field.max}
+          step={field.step}
+          placeholder={t("common.min")}
+          aria-label={`${field.label} ${t("common.min")}`}
+          onChange={(event) => field.onMinChange(event.target.value)}
+        />
+        <span className="shrink-0 text-[11px] text-muted-foreground">–</span>
+        <Input
+          id={`table-filter-${field.id}-max`}
+          type="number"
+          inputMode="decimal"
+          className="h-8 min-w-0 flex-1 text-xs"
+          value={field.maxValue}
+          min={field.min}
+          max={field.max}
+          step={field.step}
+          placeholder={t("common.max")}
+          aria-label={`${field.label} ${t("common.max")}`}
+          onChange={(event) => field.onMaxChange(event.target.value)}
+        />
+        {field.unit ? <span className="shrink-0 text-[11px] text-muted-foreground">{field.unit}</span> : null}
+      </div>
+    </fieldset>
+  );
+}
+
+function rangeFieldLabel(field: DataTableRangeField, unit = ""): string | undefined {
+  if (field.minValue !== "" && field.maxValue !== "") return `${field.minValue}–${field.maxValue}${unit}`;
+  if (field.minValue !== "") return `≥${field.minValue}${unit}`;
+  if (field.maxValue !== "") return `≤${field.maxValue}${unit}`;
+  return undefined;
+}
 
 function findGroupLabel(groups: DataTableFilterOptionGroup[], value: string): string | undefined {
   if (!value) return undefined;
@@ -72,7 +144,7 @@ function findSelectedLabel(options: DataTableFilterOption[], value: string): str
 
 export function DataTableFilters({ filters }: { filters: DataTableFilter[] }) {
   const { t } = useTranslation();
-  const activeCount = filters.filter((filter) => filter.value !== "").length;
+  const activeCount = filters.filter(filterIsActive).length;
 
   return (
     <DropdownMenu>
@@ -85,6 +157,20 @@ export function DataTableFilters({ filters }: { filters: DataTableFilter[] }) {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-52">
         {filters.map((filter) => {
+          if ("type" in filter && filter.type === "range-group") {
+            const selectedLabel = filter.selectedLabel ?? filter.fields.map((field) => rangeFieldLabel(field, field.unit ?? "")).filter(Boolean).join(" · ");
+            return (
+              <DropdownMenuSub key={filter.id}>
+                <DropdownMenuSubTrigger>
+                  <span>{filter.label}</span>
+                  {selectedLabel ? <span className="max-w-24 truncate text-xs text-muted-foreground">{selectedLabel}</span> : null}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-80 space-y-2.5 p-2" onKeyDown={(event) => event.stopPropagation()}>
+                  {filter.fields.map((field) => <RangeFilterField key={field.id} field={field} />)}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            );
+          }
           if (!("options" in filter)) {
             return (
               <DropdownMenuSub key={filter.id}>
@@ -197,7 +283,16 @@ export function DataTableFilters({ filters }: { filters: DataTableFilter[] }) {
         {activeCount > 0 ? (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => filters.forEach((filter) => filter.onChange(""))}><X />{t("common.clearFilters")}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => filters.forEach((filter) => {
+              if ("type" in filter && filter.type === "range-group") {
+                filter.fields.forEach((field) => {
+                  field.onMinChange("");
+                  field.onMaxChange("");
+                });
+                return;
+              }
+              filter.onChange("");
+            })}><X />{t("common.clearFilters")}</DropdownMenuItem>
           </>
         ) : null}
       </DropdownMenuContent>

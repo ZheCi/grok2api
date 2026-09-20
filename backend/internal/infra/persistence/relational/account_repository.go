@@ -116,6 +116,7 @@ func (r *AccountRepository) List(ctx context.Context, input repository.AccountLi
 	}
 	query = applyWebAgreementFilter(query, input.Filter.Agreement)
 	query = applyAssociationFilter(query, input.Filter.Provider, input.Filter.Association)
+	query = r.applyAccountCallQualityFilter(query, input.Filter)
 	if input.Filter.RestrictIDs {
 		if len(input.Filter.AccountIDs) == 0 {
 			query = query.Where("1 = 0")

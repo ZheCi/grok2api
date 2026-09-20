@@ -226,6 +226,16 @@ type ListAccountsInput = {
   risk?: string;
   agreement?: string;
   association?: string;
+  callCountMin?: number;
+  callCountMax?: number;
+  failStreakMin?: number;
+  failStreakMax?: number;
+  failRateMin?: number;
+  failRateMax?: number;
+  softTPS?: number;
+  hardTPS?: number;
+  minGenMs?: number;
+  failClosed?: boolean;
   // 为空时返回全部 provider 的账号，用于跨 provider 的通用名单（如请求审计筛选）。
   provider?: AccountProvider;
   sortBy?: string;
@@ -242,6 +252,16 @@ export function listAccounts(input: ListAccountsInput): Promise<PaginatedDTO<Acc
   if (input.risk) query.set("risk", input.risk);
   if (input.agreement) query.set("agreement", input.agreement);
   if (input.association) query.set("association", input.association);
+  if (input.callCountMin !== undefined) query.set("callCountMin", String(input.callCountMin));
+  if (input.callCountMax !== undefined) query.set("callCountMax", String(input.callCountMax));
+  if (input.failStreakMin !== undefined) query.set("failStreakMin", String(input.failStreakMin));
+  if (input.failStreakMax !== undefined) query.set("failStreakMax", String(input.failStreakMax));
+  if (input.failRateMin !== undefined) query.set("failRateMin", String(input.failRateMin));
+  if (input.failRateMax !== undefined) query.set("failRateMax", String(input.failRateMax));
+  if (input.softTPS !== undefined) query.set("softTPS", String(input.softTPS));
+  if (input.hardTPS !== undefined) query.set("hardTPS", String(input.hardTPS));
+  if (input.minGenMs !== undefined) query.set("minGenMS", String(input.minGenMs));
+  if (input.failClosed !== undefined) query.set("failClosed", String(input.failClosed));
   if (input.sortBy && input.sortOrder) {
     query.set("sortBy", input.sortBy);
     query.set("sortOrder", input.sortOrder);
