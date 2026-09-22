@@ -28,6 +28,7 @@ func TestEstimateOfficialCostMatchesControlledModelFamilies(t *testing.T) {
 	}{
 		{model: "Build/grok-build-0.1", canonical: "grok-build-0.1"},
 		{model: "Console/grok-4.6-latest", canonical: "grok-4.6"},
+		{model: "Build/grok-4.7-xhigh", canonical: "grok-4.7"},
 		{model: "grok_build/grok-code-fast-1-0825", canonical: "grok-build-0.1"},
 		{model: "Console/grok-4.3-high", canonical: "grok-4.3"},
 		{model: "Web/grok-4.5-2026-07-14", canonical: "grok-4.5"},
@@ -55,6 +56,7 @@ func TestOfficialPricingMatchesPublishedTokenRates(t *testing.T) {
 	}{
 		{model: "grok-build-0.1", inputCost: 10_000_000_000, cachedCost: 2_000_000_000, outputCost: 20_000_000_000},
 		{model: "grok-4.6", inputCost: 20_000_000_000, cachedCost: 5_000_000_000, outputCost: 60_000_000_000},
+		{model: "grok-4.7", inputCost: 20_000_000_000, cachedCost: 5_000_000_000, outputCost: 60_000_000_000},
 		{model: "grok-4.5", inputCost: 20_000_000_000, cachedCost: 3_000_000_000, outputCost: 60_000_000_000},
 		{model: "grok-4.3", inputCost: 12_500_000_000, cachedCost: 2_000_000_000, outputCost: 25_000_000_000},
 		{model: "grok-4.20-multi-agent-0309", inputCost: 12_500_000_000, cachedCost: 2_000_000_000, outputCost: 25_000_000_000},

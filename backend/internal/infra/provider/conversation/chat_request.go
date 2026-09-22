@@ -9,7 +9,7 @@ import (
 )
 
 // convertChatRequest 将 Chat Completions 请求完整转换为标准 Responses 输入。
-func convertChatRequest(body []byte, model string) ([]byte, ResponseOptions, error) {
+func convertChatRequest(body []byte, model string, cache *ReasoningCache, scope string) ([]byte, ResponseOptions, error) {
 	var source map[string]json.RawMessage
 	if err := json.Unmarshal(body, &source); err != nil {
 		return nil, ResponseOptions{}, fmt.Errorf("解析 Chat Completions 请求: %w", err)
@@ -18,7 +18,7 @@ func convertChatRequest(body []byte, model string) ([]byte, ResponseOptions, err
 	if err := json.Unmarshal(source["messages"], &messages); err != nil || len(messages) == 0 {
 		return nil, ResponseOptions{}, errors.New("messages 必须是非空数组")
 	}
-	input, err := convertChatMessages(messages)
+	input, err := convertChatMessages(messages, cache, scope)
 	if err != nil {
 		return nil, ResponseOptions{}, err
 	}
@@ -69,7 +69,7 @@ func convertChatRequest(body []byte, model string) ([]byte, ResponseOptions, err
 		target["tool_choice"] = choice
 	}
 	converted, err := json.Marshal(target)
-	return converted, ResponseOptions{StopSequences: stopSequences}, err
+	return converted, ResponseOptions{StopSequences: stopSequences}.WithReasoningReplay(cache, scope), err
 }
 
 func parseChatStopSequences(raw json.RawMessage) ([]string, error) {
@@ -106,7 +106,7 @@ type chatMessage struct {
 	Name       string          `json:"name"`
 }
 
-func convertChatMessages(messages []chatMessage) ([]any, error) {
+func convertChatMessages(messages []chatMessage, cache *ReasoningCache, scope string) ([]any, error) {
 	input := make([]any, 0, len(messages))
 	for _, message := range messages {
 		role := strings.ToLower(strings.TrimSpace(message.Role))
@@ -124,7 +124,7 @@ func convertChatMessages(messages []chatMessage) ([]any, error) {
 				if err != nil {
 					return nil, err
 				}
-				input = append(input, calls...)
+				input = append(input, restoreReasoningForCalls(calls, cache, scope)...)
 			}
 		case "tool":
 			if strings.TrimSpace(message.ToolCallID) == "" {

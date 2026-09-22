@@ -1312,6 +1312,10 @@ func TestShouldHoldQualityStreamGates(t *testing.T) {
 	if !shouldHoldQualityStream(input, nil, route, audit.OperationChat, cfg) {
 		t.Fatal("expected hold on thinking build chat")
 	}
+	grok47 := modeldomain.Route{Provider: accountdomain.ProviderBuild, UpstreamModel: "grok-4.7", PublicID: "grok-4.7"}
+	if !shouldHoldQualityStream(Input{Streaming: true, PublicModel: "grok-4.7"}, nil, grok47, audit.OperationResponses, cfg) {
+		t.Fatal("grok-4.7 must hold missing thinking")
+	}
 	off := cfg
 	off.Enabled = false
 	if shouldHoldQualityStream(input, nil, route, audit.OperationChat, off) {

@@ -9,7 +9,7 @@ import (
 
 const anthropicBillingHeaderPrefix = "x-anthropic-billing-header: "
 
-func convertMessagesRequest(body []byte, model string) ([]byte, ResponseOptions, error) {
+func convertMessagesRequest(body []byte, model string, cache *ReasoningCache, scope string) ([]byte, ResponseOptions, error) {
 	var request anthropicRequest
 	if err := json.Unmarshal(body, &request); err != nil {
 		return nil, ResponseOptions{}, fmt.Errorf("解析 Messages 请求: %w", err)
@@ -45,7 +45,15 @@ func convertMessagesRequest(body []byte, model string) ([]byte, ResponseOptions,
 			return nil, ResponseOptions{}, fmt.Errorf("不支持 thinking.type=%q", request.Thinking.Type)
 		}
 	}
-	input, inlineInstructions, err := convertAnthropicMessages(request.Messages, anthropicDeclaredToolNames(request.Tools))
+	hasWebSearchTool := hasAnthropicWebSearchTool(request.Tools)
+	webSearchEnabled := hasWebSearchTool && (request.ToolChoice == nil || !strings.EqualFold(strings.TrimSpace(request.ToolChoice.Type), "none"))
+	replayCache, replayScope := cache, scope
+	if webSearchEnabled {
+		// Hosted web search already carries its own tool state. Replaying an
+		// opaque reasoning proof into that request is rejected upstream.
+		replayCache, replayScope = nil, ""
+	}
+	input, inlineInstructions, err := convertAnthropicMessages(request.Messages, anthropicDeclaredToolNames(request.Tools), replayCache, replayScope)
 	if err != nil {
 		return nil, ResponseOptions{}, err
 	}
@@ -79,8 +87,6 @@ func convertMessagesRequest(body []byte, model string) ([]byte, ResponseOptions,
 		}
 		target["text"] = map[string]any{"format": map[string]any{"type": "json_schema", "name": "anthropic_output", "schema": request.OutputConfig.Format.Schema}}
 	}
-	hasWebSearchTool := hasAnthropicWebSearchTool(request.Tools)
-	webSearchEnabled := hasWebSearchTool && (request.ToolChoice == nil || !strings.EqualFold(strings.TrimSpace(request.ToolChoice.Type), "none"))
 	webSearchRequired := webSearchEnabled && anthropicWebSearchRequired(request.Tools, request.ToolChoice)
 	webSearchQuery := ""
 	if webSearchEnabled {
@@ -94,10 +100,10 @@ func convertMessagesRequest(body []byte, model string) ([]byte, ResponseOptions,
 		if request.OutputConfig != nil && request.OutputConfig.Effort != "" {
 			effort = request.OutputConfig.Effort
 		}
+		// Every grok-build wire tier passes through; the Build normalizer folds
+		// tiers the selected model's catalog menu does not offer.
 		switch effort {
-		case "minimal":
-			effort = "low"
-		case "low", "medium", "high", "xhigh", "max":
+		case "minimal", "low", "medium", "high", "xhigh", "max":
 		default:
 			return nil, ResponseOptions{}, fmt.Errorf("不支持 output_config.effort=%q", effort)
 		}
@@ -138,7 +144,7 @@ func convertMessagesRequest(body []byte, model string) ([]byte, ResponseOptions,
 		AnthropicWebSearchRequired: webSearchRequired,
 		AnthropicWebSearchQuery:    webSearchQuery,
 		StopSequences:              append([]string(nil), request.StopSequences...),
-	}, err
+	}.WithReasoningReplay(replayCache, replayScope), err
 }
 
 type anthropicRequest struct {
@@ -180,12 +186,29 @@ type anthropicToolChoice struct {
 	DisableParallelToolUse bool   `json:"disable_parallel_tool_use"`
 }
 
-func convertAnthropicMessages(messages []anthropicMessage, declaredTools map[string]struct{}) ([]any, []string, error) {
+func convertAnthropicMessagesWithReasoningReplay(messages []anthropicMessage, declaredTools map[string]struct{}, cache *ReasoningCache, scope string) ([]any, []string, error) {
+	return convertAnthropicMessages(messages, declaredTools, cache, scope)
+}
+
+func convertAnthropicMessages(messages []anthropicMessage, declaredTools map[string]struct{}, cache *ReasoningCache, scope string) ([]any, []string, error) {
 	input := make([]any, 0, len(messages))
 	instructions := make([]string, 0)
 	pendingCalls := make(map[string]struct{})
 	usedCalls := make(map[string]struct{})
 	serverSearches := make(map[string]map[string]any)
+	seenReasoningIDs := make(map[string]struct{})
+	seenReasoningEncrypted := make(map[string]struct{})
+	explicitReasoningEncrypted := anthropicExplicitReasoningProofs(messages)
+	appendCachedReasoning := func(item responseItem) {
+		if item.ID == "" || item.Encrypted == "" || reasoningAlreadyEmitted(seenReasoningIDs, seenReasoningEncrypted, item) {
+			return
+		}
+		if _, exists := explicitReasoningEncrypted[strings.TrimSpace(item.Encrypted)]; exists {
+			return
+		}
+		input = append(input, reasoningInputItem(item))
+		markReasoningEmitted(seenReasoningIDs, seenReasoningEncrypted, item)
+	}
 	for messageIndex, message := range messages {
 		role := strings.ToLower(strings.TrimSpace(message.Role))
 		if role == "system" || role == "developer" {
@@ -268,6 +291,11 @@ func convertAnthropicMessages(messages []anthropicMessage, declaredTools map[str
 					return nil, nil, fmt.Errorf("%s 包含重复 tool_use id %q", path, value.ID)
 				}
 				arguments, _ := json.Marshal(value.Input)
+				if cache != nil && strings.TrimSpace(scope) != "" {
+					if reasoning, found := cache.GetScoped(scope, value.ID); found && reasoning.ID != "" && reasoning.Encrypted != "" {
+						appendCachedReasoning(reasoning)
+					}
+				}
 				input = append(input, map[string]any{"type": "function_call", "call_id": value.ID, "name": value.Name, "arguments": string(arguments)})
 				pendingCalls[value.ID] = struct{}{}
 				usedCalls[value.ID] = struct{}{}
@@ -369,6 +397,34 @@ func convertAnthropicMessages(messages []anthropicMessage, declaredTools map[str
 		return nil, nil, errors.New("messages 必须为每个 tool_use 提供 tool_result")
 	}
 	return input, instructions, nil
+}
+
+func anthropicExplicitReasoningProofs(messages []anthropicMessage) map[string]struct{} {
+	proofs := make(map[string]struct{})
+	for _, message := range messages {
+		if !strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
+			continue
+		}
+		var blocks []map[string]json.RawMessage
+		if json.Unmarshal(message.Content, &blocks) != nil {
+			continue
+		}
+		for _, block := range blocks {
+			var typeName string
+			_ = json.Unmarshal(block["type"], &typeName)
+			var proof string
+			switch typeName {
+			case "thinking":
+				_ = json.Unmarshal(block["signature"], &proof)
+			case "redacted_thinking":
+				_ = json.Unmarshal(block["data"], &proof)
+			}
+			if proof = strings.TrimSpace(proof); proof != "" {
+				proofs[proof] = struct{}{}
+			}
+		}
+	}
+	return proofs
 }
 
 func applyAnthropicWebSearchResult(call map[string]any, raw json.RawMessage) {

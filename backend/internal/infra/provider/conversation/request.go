@@ -22,11 +22,17 @@ func ConvertRequest(body []byte, model, operation string) ([]byte, error) {
 
 // ConvertRequestWithOptions 同时返回下游协议特有的响应语义，供 JSON/SSE 转换阶段使用。
 func ConvertRequestWithOptions(body []byte, model, operation string) ([]byte, ResponseOptions, error) {
+	return ConvertRequestWithReasoningReplay(body, model, operation, nil, "")
+}
+
+// ConvertRequestWithReasoningReplay converts Chat or Messages requests and,
+// when scope is set, restores tool-call reasoning proofs from cache.
+func ConvertRequestWithReasoningReplay(body []byte, model, operation string, cache *ReasoningCache, scope string) ([]byte, ResponseOptions, error) {
 	switch operation {
 	case OperationChat:
-		return convertChatRequest(body, model)
+		return convertChatRequest(body, model, cache, scope)
 	case OperationMessages:
-		return convertMessagesRequest(body, model)
+		return convertMessagesRequest(body, model, cache, scope)
 	default:
 		converted, err := replaceModel(body, model)
 		return converted, ResponseOptions{}, err
