@@ -27,6 +27,8 @@ var catalog = []ModelSpec{
 	{PublicID: "grok-4.20-0309-non-reasoning", UpstreamModel: "grok-4.20-0309-non-reasoning", MaxOutputTokens: 1_000_000},
 	{PublicID: "grok-4.20-multi-agent-0309", UpstreamModel: "grok-4.20-multi-agent-0309", SupportsReasoning: true, SupportsReasoningEffort: true, MaxOutputTokens: 1_000_000},
 	{PublicID: "grok-4.5", UpstreamModel: "grok-4.5", SupportsReasoning: true, SupportsReasoningEffort: true, DefaultReasoningEffort: "medium", MaxOutputTokens: 1_000_000},
+	// Same published rates and effort contract as grok-4.6. Gateway default stays medium.
+	{PublicID: "grok-4.7", UpstreamModel: "grok-4.7", SupportsReasoning: true, SupportsReasoningEffort: true, DefaultReasoningEffort: "medium", MaxOutputTokens: 1_000_000},
 	{PublicID: "grok-build-0.1", UpstreamModel: "grok-build-0.1", MaxOutputTokens: 256_000},
 }
 
@@ -62,6 +64,7 @@ var aliases = []provider.ModelAlias{
 	consoleAlias("grok-4.20-0309-non-reasoning-console", "grok-4.20-0309-non-reasoning", "grok-4.20-0309-non-reasoning", ""),
 	consoleAlias("grok-4.20-multi-agent-console", "grok-4.20-multi-agent-0309", "grok-4.20-multi-agent-0309", ""),
 	consoleAlias("grok-4.5-console", "grok-4.5", "grok-4.5", ""),
+	consoleAlias("grok-4.7-console", "grok-4.7", "grok-4.7", ""),
 	consoleAlias("grok-build-console", "grok-build-0.1", "grok-build-0.1", ""),
 	consoleAlias("grok-4.3-low", "grok-4.3", "grok-4.3", "low"),
 	consoleAlias("grok-4.3-medium", "grok-4.3", "grok-4.3", "medium"),

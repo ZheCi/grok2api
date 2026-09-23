@@ -28,6 +28,7 @@ func TestEstimateOfficialCostMatchesControlledModelFamilies(t *testing.T) {
 	}{
 		{model: "Build/grok-build-0.1", canonical: "grok-build-0.1"},
 		{model: "Console/grok-4.6-latest", canonical: "grok-4.6"},
+		{model: "Console/grok-4.7-latest", canonical: "grok-4.7"},
 		{model: "Build/grok-4.7-xhigh", canonical: "grok-4.7"},
 		{model: "grok_build/grok-code-fast-1-0825", canonical: "grok-build-0.1"},
 		{model: "Console/grok-4.3-high", canonical: "grok-4.3"},
@@ -74,6 +75,10 @@ func TestOfficialPricingMatchesPublishedTokenRates(t *testing.T) {
 	longBuild, ok := EstimateOfficialCost("Build/grok-build-0.1", 1_000_000, 0, 1_000_000, 200_001)
 	if !ok || longBuild.CostInUSDTicks != 60_000_000_000 {
 		t.Fatalf("long-context Build price = %#v, %v", longBuild, ok)
+	}
+	long47, ok := EstimateOfficialCost("grok-4.7", 1_000_000, 0, 1_000_000, 200_001)
+	if !ok || long47.Model != "grok-4.7" || long47.CostInUSDTicks != 160_000_000_000 {
+		t.Fatalf("long-context grok-4.7 price = %#v, %v", long47, ok)
 	}
 }
 

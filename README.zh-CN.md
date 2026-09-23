@@ -24,7 +24,13 @@
 > 推荐个人新项目 [DEEIX-AI / DEEIX-Chat](https://github.com/DEEIX-AI/DEEIX-Chat)：面向多模型路由、对话、文件、工具、计费与运维的一体化轻量 AI 平台。
 
 > [!NOTE]
-> **本 fork（lij768423-svg/grok2api）开箱即用。** 基于官方最新，默认打开 `qualityGuard` + `requestRetry`。当前 lab 版 **v3.1.8-lab**，详见下面「本次更新」。`docker compose up -d --build` 会带上质量守护 sidecar。不要 pull `ghcr.io/chenyme/grok2api:latest`（官方同参数但默认不拦截）。上游：[chenyme#1013](https://github.com/chenyme/grok2api/pull/1013) floor，[chenyme#1015](https://github.com/chenyme/grok2api/pull/1015) TUI hold — 不要带 fork 的 `enabled: true`。
+> **本 fork（lij768423-svg/grok2api）开箱即用。** 基于官方最新，默认打开 `qualityGuard` + `requestRetry`。当前 lab 版 **v3.1.9-lab**，详见下面「本次更新」。`docker compose up -d --build` 会带上质量守护 sidecar。不要 pull `ghcr.io/chenyme/grok2api:latest`（官方同参数但默认不拦截）。上游：[chenyme#1013](https://github.com/chenyme/grok2api/pull/1013) floor，[chenyme#1015](https://github.com/chenyme/grok2api/pull/1015) TUI hold — 不要带 fork 的 `enabled: true`。
+
+## 本次更新（v3.1.9-lab）
+
+相对 **v3.1.8-lab**。镜像：`ghcr.io/lij768423-svg/grok2api:v3.1.9-lab`、`ghcr.io/lij768423-svg/grok2api-quality-guard:v3.1.9-lab`（`latest` 会跟上）。
+
+`grok-4.7` 成为一等对话模型。价格和推理档位与 `grok-4.6` 相同：500k 上下文，文本和图片进、文本出，`low` / `medium` / `high` / `xhigh`。Console 内置 `Console/grok-4.7`。已经暴露 `grok-4.6` 或 `grok-4.7` 的 Build 账号会保留 `grok-4.6` 和 `grok-4.5`，稀疏 `/models` 还停在 4.6 时补上 `grok-4.7`。质量守护默认仍是 `grok-4.6`；要探测 4.7 把 `qualityGuard.model` 改成 `grok-4.7`。
 
 ## 本次更新（v3.1.8-lab）
 
@@ -304,6 +310,7 @@ Build 不使用全局固定模型清单。账号同步会读取上游 `/models`�
 | 模型 | 类型 | 可用条件 | 网关接口能力 |
 | :-- | :-- | :-- | :-- |
 | 上游 `/models` 返回的对话模型（例如 `grok-4.5`） | 对话 | 当前账号实际返回 | Chat Completions、Responses、Messages、compact、stored response |
+| `grok-4.7` | 对话 | 已经暴露 `grok-4.6` 或 `grok-4.7` 的 Build 账号 | Chat Completions、Responses、Messages；稀疏目录仍停在 `grok-4.6` 时网关补齐。`grok-4.6` 和 `grok-4.5` 继续保留。effort：low / medium / high / xhigh |
 | `grok-composer-2.5-fast` | 对话 | Grok Build OAuth 账号 | Chat Completions、Responses、Messages；即使上游稀疏目录暂未列出，网关也会按 OAuth 会话能力补齐 |
 | `grok-imagine-video-1.5` | 视频 | Super/付费 Build 账号 | Videos；Free 或能力未知账号不会获得该路由 |
 
@@ -333,6 +340,7 @@ Console 使用当前版本内置目录。对话为无状态转发；图片、视
 | `grok-4.20-0309-non-reasoning` | 对话 | Chat Completions、Responses、Messages |
 | `grok-4.20-0309-reasoning` | 对话 | Chat Completions、Responses、Messages；模型会推理，但上游不接受可配置 `reasoningEffort` |
 | `grok-4.20-multi-agent-0309` | 对话 | Chat Completions、Responses、Messages |
+| `grok-4.7` | 对话 | Chat Completions、Responses、Messages；effort 为 low / medium / high / xhigh |
 | `grok-4.5` | 对话 | Chat Completions、Responses、Messages |
 | `grok-4.3` | 对话 | Chat Completions、Responses、Messages |
 | `grok-build-0.1` | 对话 | Chat Completions、Responses、Messages |

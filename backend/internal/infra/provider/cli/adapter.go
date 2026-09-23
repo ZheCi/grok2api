@@ -51,6 +51,7 @@ const (
 	buildControlTimeout     = 30 * time.Second
 	buildGrok45Model        = "grok-4.5"
 	buildGrok46Model        = "grok-4.6"
+	buildGrok47Model        = "grok-4.7"
 )
 
 // Adapter implements the Grok Build CLI Responses, model, Billing, and OAuth protocols.
@@ -704,16 +705,17 @@ func (a *Adapter) ListModels(ctx context.Context, credential account.Credential)
 // NormalizeAccountModelCapabilities normalizes capabilities that the OAuth
 // session contract exposes independently of the account's sparse /models list.
 // Composer is available to Build OAuth sessions independently of the sparse
-// live catalog. Grok 4.6 sessions retain the still-supported Grok 4.5 route for
-// backwards compatibility. Super always includes video 1.5; Free and Unknown
-// remove video 1.5 exactly. BuildAPIFallback is ignored.
+// live catalog. A Build session that already exposes Grok 4.6 or 4.7 keeps
+// grok-4.6 and grok-4.5, and gains grok-4.7 when the sparse /models list has
+// not caught up. Super always includes video 1.5; Free and Unknown remove
+// video 1.5 exactly. BuildAPIFallback is ignored.
 func (a *Adapter) NormalizeAccountModelCapabilities(models []string, billing *account.Billing, credential account.Credential) []string {
 	super := account.IsBuildSuper(credential, billing)
 	composer := credential.Provider == account.ProviderBuild && credential.AuthType == account.AuthTypeOAuth
-	result := make([]string, 0, len(models)+2)
-	seen := make(map[string]struct{}, len(models)+2)
+	result := make([]string, 0, len(models)+4)
+	seen := make(map[string]struct{}, len(models)+4)
 	hasVideo15 := false
-	hasGrok46 := false
+	hasFrontier := false
 	for _, model := range models {
 		model = strings.TrimSpace(model)
 		if model == "" {
@@ -728,16 +730,19 @@ func (a *Adapter) NormalizeAccountModelCapabilities(models []string, billing *ac
 			}
 			hasVideo15 = true
 		}
-		if model == buildGrok46Model {
-			hasGrok46 = true
+		if model == buildGrok46Model || model == buildGrok47Model {
+			hasFrontier = true
 		}
 		seen[model] = struct{}{}
 		result = append(result, model)
 	}
-	if credential.Provider == account.ProviderBuild && hasGrok46 {
-		if _, exists := seen[buildGrok45Model]; !exists {
-			seen[buildGrok45Model] = struct{}{}
-			result = append(result, buildGrok45Model)
+	if credential.Provider == account.ProviderBuild && hasFrontier {
+		for _, extra := range []string{buildGrok47Model, buildGrok46Model, buildGrok45Model} {
+			if _, exists := seen[extra]; exists {
+				continue
+			}
+			seen[extra] = struct{}{}
+			result = append(result, extra)
 		}
 	}
 	if super && !hasVideo15 {

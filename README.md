@@ -24,7 +24,13 @@
 > Check out [DEEIX-AI / DEEIX-Chat](https://github.com/DEEIX-AI/DEEIX-Chat), a lightweight, integrated AI platform for model routing, chat, files, tools, billing, identity, and operations.
 
 > [!NOTE]
-> **This fork (lij768423-svg/grok2api) is out of the box.** Official latest plus `qualityGuard` / `requestRetry` ON. Current lab release is **v3.1.8-lab** — see What's new below. `docker compose up -d --build` starts the sidecar. Do not pull `ghcr.io/chenyme/grok2api:latest` (same numbers, intercept off). Upstream: [chenyme#1013](https://github.com/chenyme/grok2api/pull/1013) floor, [chenyme#1015](https://github.com/chenyme/grok2api/pull/1015) TUI hold — do not include this fork's `enabled: true`.
+> **This fork (lij768423-svg/grok2api) is out of the box.** Official latest plus `qualityGuard` / `requestRetry` ON. Current lab release is **v3.1.9-lab** — see What's new below. `docker compose up -d --build` starts the sidecar. Do not pull `ghcr.io/chenyme/grok2api:latest` (same numbers, intercept off). Upstream: [chenyme#1013](https://github.com/chenyme/grok2api/pull/1013) floor, [chenyme#1015](https://github.com/chenyme/grok2api/pull/1015) TUI hold — do not include this fork's `enabled: true`.
+
+## What's new (v3.1.9-lab)
+
+Relative to **v3.1.8-lab**. Images: `ghcr.io/lij768423-svg/grok2api:v3.1.9-lab`, `ghcr.io/lij768423-svg/grok2api-quality-guard:v3.1.9-lab` (`latest` follows).
+
+`grok-4.7` is a first-class conversation model. Same price and effort contract as `grok-4.6`: 500k context, text and image in, text out, `low` / `medium` / `high` / `xhigh`. Console ships `Console/grok-4.7`. A Build account that already exposes `grok-4.6` or `grok-4.7` keeps `grok-4.6` and `grok-4.5`, and gains `grok-4.7` when the sparse `/models` list has not caught up. Quality-guard default stays `grok-4.6`; set `qualityGuard.model: grok-4.7` to probe 4.7.
 
 ## What's new (v3.1.8-lab)
 
@@ -302,6 +308,7 @@ Build does not use one global static model list. Account synchronization reads t
 | Model | Type | Availability | Gateway surfaces |
 | :-- | :-- | :-- | :-- |
 | Conversation models returned by upstream `/models` (for example, `grok-4.5`) | Conversation | Returned by the selected account | Chat Completions, Responses, Messages, compact, stored responses |
+| `grok-4.7` | Conversation | Build accounts that already expose `grok-4.6` or `grok-4.7` | Chat Completions, Responses, Messages; supplemented when a sparse catalog still stops at `grok-4.6`. `grok-4.6` and `grok-4.5` stay available. Effort: low / medium / high / xhigh |
 | `grok-composer-2.5-fast` | Conversation | Grok Build OAuth accounts | Chat Completions, Responses, Messages; supplemented from the OAuth session contract when a sparse upstream catalog omits it |
 | `grok-imagine-video-1.5` | Video | Super/paid Build accounts | Videos; not assigned to Free or unknown-entitlement accounts |
 
@@ -334,6 +341,7 @@ Console uses the catalog built into the current release. Conversation forwarding
 | `grok-4.20-0309-non-reasoning` | Conversation | Chat Completions, Responses, Messages |
 | `grok-4.20-0309-reasoning` | Conversation | Chat Completions, Responses, Messages; the model reasons but the upstream rejects configurable `reasoningEffort` |
 | `grok-4.20-multi-agent-0309` | Conversation | Chat Completions, Responses, Messages |
+| `grok-4.7` | Conversation | Chat Completions, Responses, Messages; effort low / medium / high / xhigh |
 | `grok-4.5` | Conversation | Chat Completions, Responses, Messages |
 | `grok-4.3` | Conversation | Chat Completions, Responses, Messages |
 | `grok-build-0.1` | Conversation | Chat Completions, Responses, Messages |

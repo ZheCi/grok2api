@@ -738,13 +738,18 @@ func TestNormalizeAccountModelCapabilitiesKeepsGrok45ForBuildGrok46(t *testing.T
 	adapter := &Adapter{}
 	build := account.Credential{Provider: account.ProviderBuild}
 	got := adapter.NormalizeAccountModelCapabilities([]string{buildGrok46Model}, nil, build)
-	if len(got) != 2 || got[0] != buildGrok46Model || got[1] != buildGrok45Model {
+	if len(got) != 3 || got[0] != buildGrok46Model || got[1] != buildGrok47Model || got[2] != buildGrok45Model {
 		t.Fatalf("Build Grok 4.6 compatibility capabilities = %#v", got)
 	}
 
 	got = adapter.NormalizeAccountModelCapabilities([]string{buildGrok45Model, buildGrok46Model, buildGrok45Model}, nil, build)
-	if len(got) != 2 || got[0] != buildGrok45Model || got[1] != buildGrok46Model {
+	if len(got) != 3 || got[0] != buildGrok45Model || got[1] != buildGrok46Model || got[2] != buildGrok47Model {
 		t.Fatalf("Build Grok 4.5 compatibility was not deduplicated: %#v", got)
+	}
+
+	got = adapter.NormalizeAccountModelCapabilities([]string{buildGrok47Model}, nil, build)
+	if len(got) != 3 || got[0] != buildGrok47Model || got[1] != buildGrok46Model || got[2] != buildGrok45Model {
+		t.Fatalf("Build Grok 4.7 compatibility capabilities = %#v", got)
 	}
 
 	console := account.Credential{Provider: account.ProviderConsole}
