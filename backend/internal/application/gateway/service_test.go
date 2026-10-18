@@ -222,6 +222,9 @@ func TestGatewayFailsOverBeforeReturningBody(t *testing.T) {
 	if len(adapter.attempts) != 2 || adapter.attempts[0] != first.ID || adapter.attempts[1] != second.ID {
 		t.Fatalf("attempts = %#v", adapter.attempts)
 	}
+	if got := adapter.transientRetries; len(got) != 2 || got[0] != 0 || got[1] != 0 {
+		t.Fatalf("payment failover transient retries = %#v, want [0 0]", got)
+	}
 	identity := resolveBuildSessionIdentity(clientKey.ID, account.ProviderBuild, "grok-test", "", "claude-session", nil)
 	expectedCacheKey := identity.upstreamID
 	if adapter.lastPromptCacheKey != expectedCacheKey {
@@ -657,6 +660,9 @@ func TestGatewayNonStreamingEmptyIdleCoolsAccountAndSwitches(t *testing.T) {
 	_ = result.Body.Close()
 	if len(adapter.attempts) != 2 || adapter.attempts[0] != credentials[0].ID || adapter.attempts[1] != credentials[1].ID {
 		t.Fatalf("attempts = %#v", adapter.attempts)
+	}
+	if got := adapter.transientRetries; len(got) != 2 || got[0] != 0 || got[1] != 1 {
+		t.Fatalf("idle timeout transient retries = %#v, want [0 1]", got)
 	}
 	cooled, err := accountRepo.Get(ctx, credentials[0].ID)
 	if err != nil {
@@ -2102,6 +2108,9 @@ func TestGatewayRefreshesAndRetriesBuildUnauthorizedOnce(t *testing.T) {
 	if string(body) != "ok" || adapter.attempts.Load() != 2 || adapter.refreshes.Load() != 1 {
 		t.Fatalf("body=%q attempts=%d refreshes=%d", body, adapter.attempts.Load(), adapter.refreshes.Load())
 	}
+	if got := adapter.TransientRetries(); len(got) != 2 || got[0] != 0 || got[1] != 0 {
+		t.Fatalf("auth resubmit transient retries = %#v, want [0 0]", got)
+	}
 	updated, err := accountRepo.Get(ctx, credential.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -2837,6 +2846,7 @@ type failoverAdapter struct {
 	failureBody            string
 	failureHeader          http.Header
 	attempts               []uint64
+	transientRetries       []int
 	lastMethod             string
 	lastPath               string
 	lastPromptCacheKey     string
@@ -3482,6 +3492,9 @@ func TestGatewayGeneric429CoolsAccountAndRotates(t *testing.T) {
 	_ = result.Body.Close()
 	if attempts := adapter.Attempts(); len(attempts) != 2 || attempts[0] != credentials[0].ID || attempts[1] != credentials[1].ID {
 		t.Fatalf("generic 429 must rotate, attempts=%#v", attempts)
+	}
+	if got := adapter.TransientRetries(); len(got) != 2 || got[0] != 0 || got[1] != 0 {
+		t.Fatalf("rate-limit rotation must not count as a transient retry: %#v", got)
 	}
 	cooled, err := accountRepo.Get(ctx, credentials[0].ID)
 	if err != nil {
@@ -4161,11 +4174,12 @@ func (a *barePermissionEgressAdapter) ForwardResponse(context.Context, provider.
 }
 
 type scriptedBuildAdapter struct {
-	mu            sync.Mutex
-	attempts      []uint64
-	responses     map[uint64][]scriptedBuildResponse
-	refreshes     atomic.Int64
-	lastRateLimit *provider.RateLimitMetadata
+	mu               sync.Mutex
+	attempts         []uint64
+	transientRetries []int
+	responses        map[uint64][]scriptedBuildResponse
+	refreshes        atomic.Int64
+	lastRateLimit    *provider.RateLimitMetadata
 }
 
 func (a *scriptedBuildAdapter) Provider() account.Provider { return account.ProviderBuild }
@@ -4179,6 +4193,7 @@ func (a *scriptedBuildAdapter) ForwardResponse(_ context.Context, request provid
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.attempts = append(a.attempts, request.Credential.ID)
+	a.transientRetries = append(a.transientRetries, request.TransientRetry)
 	queue := a.responses[request.Credential.ID]
 	if len(queue) == 0 {
 		return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"resp-default"}`))}, nil
@@ -4208,6 +4223,11 @@ func (a *scriptedBuildAdapter) Attempts() []uint64 {
 	defer a.mu.Unlock()
 	return append([]uint64(nil), a.attempts...)
 }
+func (a *scriptedBuildAdapter) TransientRetries() []int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]int(nil), a.transientRetries...)
+}
 
 type systemicForbiddenAdapter struct {
 	mu       sync.Mutex
@@ -4233,11 +4253,13 @@ func (spendingLimitAdapter) ForwardResponse(context.Context, provider.ResponseRe
 }
 
 type authRescueAdapter struct {
-	attempts      atomic.Int64
-	refreshes     atomic.Int64
-	rejectAll     atomic.Bool
-	denyChat      atomic.Bool
-	recoverDenied atomic.Bool
+	mu               sync.Mutex
+	transientRetries []int
+	attempts         atomic.Int64
+	refreshes        atomic.Int64
+	rejectAll        atomic.Bool
+	denyChat         atomic.Bool
+	recoverDenied    atomic.Bool
 }
 
 func (a *authRescueAdapter) Provider() account.Provider { return account.ProviderBuild }
@@ -4246,6 +4268,9 @@ func (a *authRescueAdapter) Definition() provider.Definition {
 }
 func (a *authRescueAdapter) ForwardResponse(_ context.Context, request provider.ResponseResourceRequest) (*provider.Response, error) {
 	a.attempts.Add(1)
+	a.mu.Lock()
+	a.transientRetries = append(a.transientRetries, request.TransientRetry)
+	a.mu.Unlock()
 	if a.denyChat.Load() {
 		if a.recoverDenied.Load() {
 			return &provider.Response{
@@ -4275,6 +4300,11 @@ func (a *authRescueAdapter) ForwardResponse(_ context.Context, request provider.
 		}, nil
 	}
 	return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader("ok"))}, nil
+}
+func (a *authRescueAdapter) TransientRetries() []int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]int(nil), a.transientRetries...)
 }
 func (a *authRescueAdapter) RefreshCredential(context.Context, account.Credential) (provider.RefreshedCredential, error) {
 	a.refreshes.Add(1)
@@ -4531,6 +4561,7 @@ func (a *failoverAdapter) ForwardResponse(_ context.Context, request provider.Re
 	}
 	a.mu.Lock()
 	a.attempts = append(a.attempts, request.Credential.ID)
+	a.transientRetries = append(a.transientRetries, request.TransientRetry)
 	a.forwardedModels = append(a.forwardedModels, request.Model)
 	a.lastMethod = request.Method
 	a.lastPath = request.Path
@@ -4572,6 +4603,7 @@ func (a *failoverAdapter) resetAttempts() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.attempts = nil
+	a.transientRetries = nil
 	a.forwardedModels = nil
 	a.lastMethod = ""
 	a.lastPath = ""
@@ -4678,6 +4710,44 @@ func TestIsUpstreamStreamFailureIncludesIdleTimeout(t *testing.T) {
 	}
 	if isUpstreamStreamFailure("") || isUpstreamStreamFailure("quality_degraded") {
 		t.Fatal("non-stream codes must not look like mid-stream failures")
+	}
+}
+
+func TestIsBuildTransientRetryStatusMatchesOfficialClient(t *testing.T) {
+	for _, status := range []int{500, 501, 503, 520, 524, 529, 530, 599} {
+		if !isBuildTransientRetryStatus(status) {
+			t.Fatalf("status %d must count as a transient retry", status)
+		}
+	}
+	for _, status := range []int{400, 401, 402, 403, 429, 525, 526, 600} {
+		if isBuildTransientRetryStatus(status) {
+			t.Fatalf("status %d must not count as a transient retry", status)
+		}
+	}
+}
+
+func TestBuildOriginTLSFailureIsNotRetryable(t *testing.T) {
+	for _, status := range []int{525, 526} {
+		response := &provider.Response{StatusCode: status, Header: http.Header{"X-Should-Retry": {"true"}}}
+		if isRetryableResponse(response, account.ProviderBuild) {
+			t.Fatalf("Build status %d must be terminal even with X-Should-Retry:true", status)
+		}
+		if !isRetryableResponse(response, account.ProviderWeb) {
+			t.Fatalf("non-Build status %d behavior changed unexpectedly", status)
+		}
+	}
+}
+
+func TestIsBuildTransientRetryErrorExcludesSemanticFailures(t *testing.T) {
+	for _, err := range []error{neterrorpkg.ErrUpstreamResponseEmpty, errQualityEmptyStream} {
+		if isBuildTransientRetryError(err) {
+			t.Fatalf("semantic failure %v must not count as a transient retry", err)
+		}
+	}
+	for _, err := range []error{errors.New("connection reset"), &neterrorpkg.IdleTimeoutError{}} {
+		if !isBuildTransientRetryError(err) {
+			t.Fatalf("transport failure %v must count as a transient retry", err)
+		}
 	}
 }
 
