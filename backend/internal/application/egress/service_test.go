@@ -57,6 +57,30 @@ func TestNormalizeProxyURLAcceptsLegacyHTTPProxyFormat(t *testing.T) {
 	if value != "http://user:password@127.0.0.1:8080" {
 		t.Fatalf("normalized legacy HTTP proxy = %q", value)
 	}
+
+	value, err = NormalizeProxyURL("1.2.3.4:8080:{account}:secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != "http://{account}:secret@1.2.3.4:8080" {
+		t.Fatalf("legacy account placeholder = %q", value)
+	}
+	value, err = NormalizeProxyURL("1.2.3.4:8080:Default.{account}:p@ss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(value, ProxyAccountPlaceholder) || strings.Contains(value, "%7Baccount%7D") {
+		t.Fatalf("legacy account placeholder was encoded: %q", value)
+	}
+	for _, invalid := range []string{
+		"1.2.3.4:8080:user:{account}",
+		"1.2.3.4:8080:{account}:{account}",
+		"1.2.3.4:8080:{account}:grok2api_account_placeholder",
+	} {
+		if _, err := NormalizeProxyURL(invalid); err == nil {
+			t.Fatalf("invalid legacy account placeholder accepted: %q", invalid)
+		}
+	}
 }
 
 func TestNormalizeProxyURLStripsTunnelRemarks(t *testing.T) {

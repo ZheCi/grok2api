@@ -1365,6 +1365,11 @@ func NormalizeProxyURL(value string) (string, error) {
 	if len(value) > maxProxyURLBytes || strings.IndexFunc(value, func(character rune) bool { return character < 0x20 || character == 0x7f }) >= 0 {
 		return "", errors.New("代理地址过长或包含控制字符")
 	}
+	// Reject this before legacy rewriting. url.UserPassword percent-encodes
+	// braces, and the rewrite restores {account} by replacing the sentinel.
+	if strings.Contains(value, ProxyAccountPlaceholder) && strings.Contains(value, proxyAccountSentinel) {
+		return "", errors.New("代理地址包含保留的账号占位符文本")
+	}
 	if normalized, ok := normalizeLegacyHTTPProxy(value); ok {
 		value = normalized
 	}
@@ -1420,11 +1425,19 @@ func normalizeLegacyHTTPProxy(value string) (string, bool) {
 	if err != nil || port == 0 {
 		return "", false
 	}
-	return (&url.URL{
+	// Keep {account} literal. UserPassword encodes braces, and account-bound
+	// proxies are detected by that exact placeholder after normalization.
+	username := strings.ReplaceAll(parts[2], ProxyAccountPlaceholder, proxyAccountSentinel)
+	password := strings.ReplaceAll(parts[3], ProxyAccountPlaceholder, proxyAccountSentinel)
+	encoded := (&url.URL{
 		Scheme: "http",
 		Host:   net.JoinHostPort(parts[0], strconv.FormatUint(port, 10)),
-		User:   url.UserPassword(parts[2], parts[3]),
-	}).String(), true
+		User:   url.UserPassword(username, password),
+	}).String()
+	if strings.Contains(parts[2], ProxyAccountPlaceholder) || strings.Contains(parts[3], ProxyAccountPlaceholder) {
+		encoded = strings.ReplaceAll(encoded, proxyAccountSentinel, ProxyAccountPlaceholder)
+	}
+	return encoded, true
 }
 
 func SanitizeCloudflareCookies(value string) string {
