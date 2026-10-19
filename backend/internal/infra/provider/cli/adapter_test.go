@@ -99,16 +99,16 @@ func TestResponseRequestSendsTransientRetryHeaderOnlyForResubmissions(t *testing
 					Request:    request,
 				}, nil
 			})
-			call := adapter.doResponseRequest(context.Background(), provider.ResponseResourceRequest{
+			response, _, err := adapter.doResponseRequest(context.Background(), provider.ResponseResourceRequest{
 				Credential:     account.Credential{ID: 7, Provider: account.ProviderBuild},
 				Method:         http.MethodPost,
 				Path:           "/responses",
 				TransientRetry: test.retry,
 			}, "access-token", nil, "https://cli-chat-proxy.grok.com/v1")
-			if call.err != nil {
-				t.Fatal(call.err)
+			if err != nil {
+				t.Fatal(err)
 			}
-			_ = call.response.Body.Close()
+			_ = response.Body.Close()
 			if got != test.want {
 				t.Fatalf("x-grok-transient-retry = %q, want %q", got, test.want)
 			}
