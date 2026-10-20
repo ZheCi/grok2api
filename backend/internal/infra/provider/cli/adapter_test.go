@@ -550,6 +550,26 @@ func TestReasoningReplayScopeSeparatesAccountAndPlane(t *testing.T) {
 	if got := adapter.scopedReasoningReplayKey(request, "https://build.example/v1"); got != "" {
 		t.Fatalf("soft/empty session unexpectedly enabled replay: %q", got)
 	}
+
+	request.ReasoningReplayKey = "explicit-session"
+	request.Credential.ID = 7
+	request.Model = "grok-4.7"
+	conversationScope := adapter.conversationReasoningScope(request, "https://build.example/v1")
+	if conversationScope == "" {
+		t.Fatal("explicit session did not produce conversation reasoning scope")
+	}
+	otherConversation := request
+	otherConversation.Credential.ID = 8
+	if got := adapter.conversationReasoningScope(otherConversation, "https://build.example/v1"); got == "" || got == conversationScope {
+		t.Fatal("conversation reasoning scope was shared across accounts")
+	}
+	if got := adapter.conversationReasoningScope(request, "https://xai.example/v1"); got == conversationScope {
+		t.Fatal("conversation reasoning scope was shared across Build and XAI")
+	}
+	request.Credential.ID = 0
+	if got := adapter.conversationReasoningScope(request, "https://build.example/v1"); got != "" {
+		t.Fatalf("missing account unexpectedly enabled conversation reasoning scope: %q", got)
+	}
 }
 
 func TestListModelsUsesOfficialMetadataHeaders(t *testing.T) {

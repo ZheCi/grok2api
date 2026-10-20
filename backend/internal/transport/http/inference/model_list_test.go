@@ -219,6 +219,25 @@ func TestCodexCatalogHidesMediaModels(t *testing.T) {
 	}
 }
 
+func TestCodexCatalogDoesNotShrinkStaticContext(t *testing.T) {
+	modeldomain.ResetUpstreamProfiles()
+	t.Cleanup(modeldomain.ResetUpstreamProfiles)
+	modeldomain.RegisterUpstreamModelProfile("grok-4.7", modeldomain.UpstreamModelProfile{ContextWindow: 8192})
+	entry := newCodexModelCatalog([]modelListItem{{
+		ID: "grok-4.7", Provider: account.ProviderBuild, Capability: modeldomain.CapabilityResponses,
+	}}).Models[0]
+	if entry.ContextWindow != 500000 {
+		t.Fatalf("context window = %d, want static 500000", entry.ContextWindow)
+	}
+	modeldomain.RegisterUpstreamModelProfile("grok-4.7", modeldomain.UpstreamModelProfile{ContextWindow: 800000})
+	raised := newCodexModelCatalog([]modelListItem{{
+		ID: "grok-4.7", Provider: account.ProviderBuild, Capability: modeldomain.CapabilityResponses,
+	}}).Models[0]
+	if raised.ContextWindow != 800000 {
+		t.Fatalf("context window = %d, want raised catalog 800000", raised.ContextWindow)
+	}
+}
+
 func TestCodexCatalogUsesConservativeUnknownModelDefaults(t *testing.T) {
 	entry := newCodexModelCatalog([]modelListItem{{
 		ID: "custom-model", Provider: account.ProviderWeb, Capability: modeldomain.CapabilityChat,

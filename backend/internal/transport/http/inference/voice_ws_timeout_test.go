@@ -59,3 +59,26 @@ func TestWatchRequestTimeoutDoesNotOverwriteAnExistingOutcome(t *testing.T) {
 		t.Fatalf("errorCode = %q, want the pre-existing outcome preserved", got)
 	}
 }
+
+func TestWatchRequestTimeoutIgnoresClientCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	errorCode := ""
+	closeAllCalled := make(chan struct{})
+	closeAll := func() { close(closeAllCalled) }
+
+	go watchRequestTimeout(ctx, &mu, &errorCode, closeAll)
+	cancel()
+
+	select {
+	case <-closeAllCalled:
+		t.Fatal("client cancel must not close the voice session from the timeout watcher")
+	case <-time.After(50 * time.Millisecond):
+	}
+	mu.Lock()
+	got := errorCode
+	mu.Unlock()
+	if got != "" {
+		t.Fatalf("errorCode = %q, want empty so the pump can label the cancel", got)
+	}
+}

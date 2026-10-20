@@ -46,7 +46,8 @@ func TestClassifyQualityHold(t *testing.T) {
 		{name: "stub-only hold expiry keeps waiting", sig: QualityStreamSignals{ReasoningStarted: true, HoldExpired: true}, want: QualityWait},
 		{name: "stub terminal enough withhold", sig: QualityStreamSignals{ReasoningStarted: true, VisibleTokens: 64, Terminal: true}, want: QualityWithhold},
 		{name: "wait for more", sig: QualityStreamSignals{VisibleTokens: 8}, want: QualityWait},
-		{name: "hold expired short delivers", sig: QualityStreamSignals{VisibleTokens: 8, HoldExpired: true}, want: QualityDeliver},
+		{name: "hold expired short prefix keeps waiting", sig: QualityStreamSignals{VisibleTokens: 8, HoldExpired: true}, want: QualityWait},
+		{name: "hold expired short terminal delivers", sig: QualityStreamSignals{VisibleTokens: 8, HoldExpired: true, Terminal: true}, want: QualityDeliver},
 		{name: "hold expired empty waits", sig: QualityStreamSignals{HoldExpired: true}, want: QualityWait},
 		{name: "hold expired zero tokens waits", sig: QualityStreamSignals{VisibleTokens: 0, OutputTokens: 0, HoldExpired: true}, want: QualityWait},
 	}
@@ -915,16 +916,12 @@ func TestPeekQualityStreamHoldTimeoutInterruptsBlockedReadAndPreservesRemainder(
 	first := sse(`data: {"choices":[{"delta":{"content":"hi"}}]}`)
 	second := sse(`data: {"choices":[{"delta":{"content":" after timeout"}}]}`, "data: [DONE]")
 	writeErr := make(chan error, 1)
-	continueWrite := make(chan struct{})
 	go func() {
 		if _, err := io.WriteString(writer, first); err != nil {
 			writeErr <- err
 			return
 		}
-		select {
-		case <-continueWrite:
-		case <-time.After(500 * time.Millisecond):
-		}
+		time.Sleep(50 * time.Millisecond)
 		if _, err := io.WriteString(writer, second); err != nil {
 			writeErr <- err
 			return
@@ -941,12 +938,11 @@ func TestPeekQualityStreamHoldTimeoutInterruptsBlockedReadAndPreservesRemainder(
 		t.Fatal(err)
 	}
 	defer replay.Close()
-	close(continueWrite)
-	if elapsed := time.Since(started); elapsed < 20*time.Millisecond || elapsed > 200*time.Millisecond {
-		t.Fatalf("peek returned after %s, want the 30ms hold timeout", elapsed)
+	if elapsed := time.Since(started); elapsed < 45*time.Millisecond {
+		t.Fatalf("peek returned after %s, before the rest of the short answer arrived", elapsed)
 	}
 	if verdict != QualityDeliver {
-		t.Fatalf("short timed-out response verdict = %s", verdict)
+		t.Fatalf("short finished response verdict = %s", verdict)
 	}
 	body, err := io.ReadAll(replay)
 	if err != nil {

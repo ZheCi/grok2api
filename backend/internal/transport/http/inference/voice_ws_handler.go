@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -126,12 +127,15 @@ func (h *Handler) proxyVoiceWebSocket(c *gin.Context, pathValue string) {
 	}
 }
 
-// watchRequestTimeout calls closeAll once ctx is done, recording errorCode as
-// "request_timeout" unless some other outcome was already set. Extracted so
-// the cancellation-triggers-cleanup behavior can be tested without a real
-// WebSocket upgrade.
+// watchRequestTimeout closes a quiet socket when the request deadline elapses.
+// A client disconnect cancels the same context without a deadline. That is
+// left for the pumps to label; closing here would finalize the session before
+// they can record it.
 func watchRequestTimeout(ctx context.Context, mu *sync.Mutex, errorCode *string, closeAll func()) {
 	<-ctx.Done()
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return
+	}
 	mu.Lock()
 	if *errorCode == "" {
 		*errorCode = "request_timeout"

@@ -301,6 +301,18 @@ type QualityGuardRequestRetryConfig struct {
 	IdleAccountCooldown             Duration `yaml:"idleAccountCooldown"`
 	MinEncryptedBytes               int      `yaml:"minEncryptedBytes"`
 	EncryptedBytesPerReasoningToken int      `yaml:"encryptedBytesPerReasoningToken"`
+	// WindowFailures counts quality-degraded attempts on one egress node inside
+	// FailureWindow. Reaching it avoids that node's accounts for AvoidDuration.
+	// Zero disables the window. It does not change the account cooldown.
+	WindowFailures int `yaml:"windowFailures"`
+	// FailureWindow is how far back those attempts count. Zero uses 1m.
+	FailureWindow Duration `yaml:"failureWindow"`
+	// AvoidDuration is how long a full window keeps the node out of selection.
+	// Zero uses 5m.
+	AvoidDuration Duration `yaml:"avoidDuration"`
+	// ConsecutiveFailures skips that node's accounts on the next switch after
+	// this many quality-degraded attempts in a row. Zero disables the streak.
+	ConsecutiveFailures int `yaml:"consecutiveFailures"`
 }
 
 type ClientKeyDefaultsConfig struct {
@@ -821,6 +833,18 @@ func validateQualityGuardRequestRetry(value QualityGuardRequestRetryConfig) erro
 	if value.EncryptedBytesPerReasoningToken != 0 && (value.EncryptedBytesPerReasoningToken < 1 || value.EncryptedBytesPerReasoningToken > 16) {
 		return errors.New("qualityGuard.requestRetry.encryptedBytesPerReasoningToken 必须在 1 到 16 之间")
 	}
+	if value.WindowFailures < 0 || value.WindowFailures > 32 {
+		return errors.New("qualityGuard.requestRetry.windowFailures 必须在 0 到 32 之间")
+	}
+	if value.ConsecutiveFailures < 0 || value.ConsecutiveFailures > 32 {
+		return errors.New("qualityGuard.requestRetry.consecutiveFailures 必须在 0 到 32 之间")
+	}
+	if d := value.FailureWindow.Value(); d != 0 && (d < time.Second || d > 24*time.Hour) {
+		return errors.New("qualityGuard.requestRetry.failureWindow 必须在 1s 到 24h 之间")
+	}
+	if d := value.AvoidDuration.Value(); d != 0 && (d < time.Second || d > 24*time.Hour) {
+		return errors.New("qualityGuard.requestRetry.avoidDuration 必须在 1s 到 24h 之间")
+	}
 	return nil
 }
 
@@ -959,6 +983,8 @@ func defaultConfig() Config {
 				MaxAttempts: 6, HoldTimeout: Duration(30 * time.Second), MinOutputTokens: 8, OnExhausted: "fail_closed",
 				AccountCooldown: Duration(12 * time.Hour), IdleAccountCooldown: Duration(15 * time.Minute),
 				MinEncryptedBytes: 256, EncryptedBytesPerReasoningToken: 4,
+				WindowFailures: 3, ConsecutiveFailures: 2,
+				FailureWindow: Duration(time.Minute), AvoidDuration: Duration(5 * time.Minute),
 			},
 		},
 		ClientKeyDefaults: ClientKeyDefaultsConfig{RPMLimit: clientkeydomain.DefaultRPMLimit, MaxConcurrent: clientkeydomain.DefaultMaxConcurrent},

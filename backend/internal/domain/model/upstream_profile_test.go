@@ -85,6 +85,54 @@ func TestMinimalIsAKnownTierAndAliasSuffix(t *testing.T) {
 	}
 }
 
+func TestLaterCatalogCannotBlindOrShrinkASharedProfile(t *testing.T) {
+	ResetUpstreamProfiles()
+	t.Cleanup(ResetUpstreamProfiles)
+
+	RegisterUpstreamModelProfile("grok-4.7", UpstreamModelProfile{
+		ReasoningEfforts:       []string{"low", "medium", "high", "xhigh"},
+		DefaultReasoningEffort: "high",
+		ContextWindow:          500000,
+	})
+	RegisterUpstreamModelProfile("grok-4.7", UpstreamModelProfile{
+		ReasoningEfforts: []string{"none"},
+		ContextWindow:    8192,
+	})
+	want := []string{ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh}
+	if got := SupportedReasoningEfforts("grok-4.7"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("none-only sync replaced efforts: %v", got)
+	}
+	if !SupportsReasoningForProvider(account.ProviderBuild, "grok-4.7") {
+		t.Fatal("none-only sync disabled reasoning for every account")
+	}
+	profile, ok := UpstreamProfile("grok-4.7")
+	if !ok || profile.ContextWindow != 500000 || profile.DefaultReasoningEffort != "high" {
+		t.Fatalf("profile = %#v ok=%v", profile, ok)
+	}
+
+	RegisterUpstreamModelProfile("grok-4.7", UpstreamModelProfile{
+		ReasoningEfforts: []string{"low"},
+		ContextWindow:    800000,
+	})
+	if got := SupportedReasoningEfforts("grok-4.7"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("narrower menu replaced efforts: %v", got)
+	}
+	profile, _ = UpstreamProfile("grok-4.7")
+	if profile.ContextWindow != 800000 {
+		t.Fatalf("context = %d, want the larger catalog window", profile.ContextWindow)
+	}
+}
+
+func TestNoneOnlyCatalogKeepsStaticMenu(t *testing.T) {
+	ResetUpstreamProfiles()
+	t.Cleanup(ResetUpstreamProfiles)
+	RegisterUpstreamModelProfile("grok-4.7", UpstreamModelProfile{ReasoningEfforts: []string{"none"}, ContextWindow: 8192})
+	want := []string{ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh}
+	if got := SupportedReasoningEfforts("grok-4.7"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("efforts = %v, want static menu %v", got, want)
+	}
+}
+
 func TestGrok47StaticCapabilities(t *testing.T) {
 	ResetUpstreamProfiles()
 	want := []string{ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh}

@@ -1247,6 +1247,14 @@ attemptLoop:
 			}
 		} else if ownership != nil && qualityAccountAttempts == 0 {
 			lease, err = s.selector.AcquirePinnedForKey(ctx, route.Provider, ownership.AccountID, route.ID, route.UpstreamModel, quotaMode, true, accountScope)
+			if err == nil && lease != nil && s.selector.nodeQuality.blocks(time.Now().UTC(), lease.Credential.EgressNodeID) {
+				lease.Release()
+				lease = nil
+				selection, err = s.selector.beginSelectionSessionForKey(ctx, route.Provider, route.ID, route.UpstreamModel, quotaMode, affinityKey, excluded, !quotaProbeAttempted, accountScope)
+				if err == nil {
+					lease, err = selection.Acquire(ctx, excluded, !quotaProbeAttempted)
+				}
+			}
 		} else if input.ForcedEgressNodeID != 0 {
 			lease, err = s.selector.AcquireForKeyOnEgressNode(ctx, route.Provider, route.ID, route.UpstreamModel, quotaMode, affinityKey, excluded, !quotaProbeAttempted, accountScope, input.ForcedEgressNodeID)
 		} else {
@@ -1641,6 +1649,9 @@ attemptLoop:
 				}
 				commit := CommitQualityHold(verdict, qualityAccountAttempts-1, holdCfg.MaxAttempts, hasNextAccount, holdCfg.OnExhausted)
 				if verdict == QualityWithhold {
+					if s.selector != nil {
+						s.selector.NoteNodeQualityDegraded(credential.EgressNodeID, time.Now().UTC())
+					}
 					cooldown := holdCfg.AccountCooldown
 					// Usage not reported yet (logged as output_tokens=0) is the
 					// empty/short-hold path, not a confirmed 128k missing-thinking
@@ -1694,6 +1705,9 @@ attemptLoop:
 					s.logger.Info("quality_degraded_deliver_last", "request_id", input.RequestID, "account_id", credential.ID, "quality_attempt", qualityAccountAttempts, "output_tokens", peekUsage.OutputTokens)
 				case QualityActionDeliver:
 					discardFallback(true)
+					if s.selector != nil {
+						s.selector.NoteNodeQualityDelivered(credential.EgressNodeID, time.Now().UTC())
+					}
 				}
 				if !commit.KeepBody {
 					_ = response.Body.Close()

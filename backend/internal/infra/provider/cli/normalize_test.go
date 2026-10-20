@@ -59,8 +59,8 @@ func TestNormalizeBuildReasoningEffort(t *testing.T) {
 		{name: "4.7 xhigh", model: "grok-4.7", effort: "xhigh", want: "xhigh"},
 		{name: "4.7 max maps to xhigh", model: "grok-4.7", effort: "max", want: "xhigh"},
 		{name: "prefixed 4.6 uppercase max maps to xhigh", model: "Build/grok-4.6", effort: "MAX", want: "xhigh"},
-		{name: "unknown xhigh remains guarded", model: "future-model", effort: "xhigh", want: "high"},
-		{name: "unknown max remains guarded", model: "future-model", effort: "max", want: "high"},
+		{name: "unknown xhigh stays unchanged", model: "future-model", effort: "xhigh", want: "xhigh"},
+		{name: "unknown max stays unchanged", model: "future-model", effort: "max", want: "max"},
 		{name: "minimal maps to low", model: "grok-4.6", effort: "minimal", want: "low"},
 		{name: "high", model: "grok-4.5", effort: "high", want: "high"},
 		{name: "medium", model: "grok-4.5", effort: "medium", want: "medium"},
@@ -69,7 +69,7 @@ func TestNormalizeBuildReasoningEffort(t *testing.T) {
 		{name: "catalog minimal forwarded verbatim", model: "grok-menu-max", effort: "minimal", want: "minimal"},
 		{name: "catalog without xhigh folds max to high", model: "grok-menu-plain", effort: "max", want: "high"},
 		{name: "catalog without xhigh folds xhigh to high", model: "grok-menu-plain", effort: "XHIGH", want: "high"},
-		{name: "catalog without low folds minimal to low fallback", model: "grok-menu-plain", effort: "minimal", want: "low"},
+		{name: "catalog without low keeps minimal", model: "grok-menu-plain", effort: "minimal", want: "minimal"},
 	}
 	modeldomain.ResetUpstreamProfiles()
 	t.Cleanup(modeldomain.ResetUpstreamProfiles)

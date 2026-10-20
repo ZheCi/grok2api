@@ -90,6 +90,11 @@ func reasoningCallIDCandidates(callID string) []string {
 	return result
 }
 
+// RememberEncryptedProof stores one encrypted reasoning proof for a tool call.
+func (c *ReasoningCache) RememberEncryptedProof(scope, callID, proofID, encrypted string) {
+	c.SetScoped(scope, callID, responseItem{ID: proofID, Type: "reasoning", Encrypted: encrypted})
+}
+
 // SetScoped records one proof under a conversation/plane scope.
 func (c *ReasoningCache) SetScoped(scope, callID string, item responseItem) {
 	if c == nil || item.Type != "reasoning" || strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.Encrypted) == "" {

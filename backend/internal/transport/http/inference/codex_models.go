@@ -115,10 +115,10 @@ func lookupGrokCapability(providerValue account.Provider, slug string) (grokMode
 	if !ok {
 		capability = grokDefaultCapability
 	}
-	// The live Build catalog (context_window) is authoritative over the static
-	// table once an account has synchronized it, exactly like grok-build.
+	// A synced catalog may raise the static context window. A smaller number
+	// from one account must not shrink the window every client already uses.
 	if providerValue == account.ProviderBuild {
-		if profile, exists := modeldomain.UpstreamProfile(slug); exists && profile.ContextWindow > 0 {
+		if profile, exists := modeldomain.UpstreamProfile(slug); exists && profile.ContextWindow > capability.contextWindow {
 			capability.contextWindow = profile.ContextWindow
 		}
 	}

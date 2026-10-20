@@ -138,6 +138,44 @@ func TestAnthropicWebSearchDoesNotInjectCachedReasoning(t *testing.T) {
 	}
 }
 
+func TestChatWebSearchDoesNotInjectCachedReasoning(t *testing.T) {
+	cache := newReasoningCache(10, time.Hour)
+	scope := "client-session/build"
+	cache.SetScoped(scope, "call_search", responseItem{
+		ID: "rs_search", Type: "reasoning", Encrypted: "search-proof",
+	})
+	body := []byte(`{
+		"model":"grok-4.6",
+		"messages":[
+			{"role":"assistant","tool_calls":[{"id":"call_search","type":"function","function":{"name":"lookup","arguments":"{}"}}]},
+			{"role":"tool","tool_call_id":"call_search","content":"ok"}
+		],
+		"web_search_options":{}
+	}`)
+	converted, options, err := ConvertRequestWithReasoningReplay(body, "grok-4.6", OperationChat, cache, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Input []map[string]any `json:"input"`
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(converted, &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range payload.Input {
+		if item["type"] == "reasoning" {
+			t.Fatalf("chat web-search request received cached reasoning: %#v", payload.Input)
+		}
+	}
+	if len(payload.Tools) != 1 || payload.Tools[0]["type"] != "web_search" {
+		t.Fatalf("tools = %#v", payload.Tools)
+	}
+	if options.reasoningCache != nil || options.reasoningScope != "" {
+		t.Fatalf("chat web-search options retained reasoning bridge: %#v", options)
+	}
+}
+
 func TestAnthropicFunctionToolRestoresCachedReasoning(t *testing.T) {
 	cache := newReasoningCache(10, time.Hour)
 	scope := "client-session/build"

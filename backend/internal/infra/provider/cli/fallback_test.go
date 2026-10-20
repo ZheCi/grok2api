@@ -13,6 +13,7 @@ import (
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/conversation"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 )
 
@@ -55,6 +56,43 @@ func TestForwardResponsePrimarySuccessDoesNotProbeFallback(t *testing.T) {
 	}
 	if marker.calls.Load() != 0 {
 		t.Fatalf("marker calls = %d", marker.calls.Load())
+	}
+}
+
+func TestForwardResponseFallbackRebuildsChatBodyWithoutBuildProof(t *testing.T) {
+	adapter, encrypted := newFallbackTestAdapter(t)
+	adapter.SetFallbackMarker(&fallbackMarkerStub{})
+	var fallbackBody string
+	adapter.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		payload, _ := io.ReadAll(request.Body)
+		if strings.Contains(request.URL.Host, "primary.test") {
+			if !strings.Contains(string(payload), "build-plane-proof") {
+				t.Fatalf("primary body lost the build-plane proof: %s", payload)
+			}
+			return jsonResponse(http.StatusForbidden, `{"error":{"message":"forbidden"}}`, request), nil
+		}
+		fallbackBody = string(payload)
+		return jsonResponse(http.StatusOK, `{"id":"resp_ok","output":[]}`, request), nil
+	})
+	credential := account.Credential{ID: 21, Provider: account.ProviderBuild, EncryptedAccessToken: encrypted}
+	resource := provider.ResponseResourceRequest{
+		Credential: credential, Billing: &account.Billing{MonthlyLimit: 100},
+		Method: http.MethodPost, Path: "/responses", Operation: conversation.OperationChat,
+		NormalizeBody: true, Model: "grok-4.6", ReasoningReplayKey: "session-seed",
+		Body: []byte(`{"model":"grok-4.6","messages":[{"role":"assistant","tool_calls":[{"id":"call_fallback","type":"function","function":{"name":"lookup","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_fallback","content":"ok"}]}`),
+	}
+	scope := adapter.conversationReasoningScope(resource, adapter.primaryBaseURL())
+	adapter.conversationReasoningCache.RememberEncryptedProof(scope, "call_fallback", "rs_build", "build-plane-proof")
+	response, err := adapter.ForwardResponse(context.Background(), resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(response.UpstreamURL, "xai.test") {
+		t.Fatalf("status=%d upstream=%s", response.StatusCode, response.UpstreamURL)
+	}
+	if strings.Contains(fallbackBody, "build-plane-proof") {
+		t.Fatalf("fallback body kept the build-plane proof: %s", fallbackBody)
 	}
 }
 

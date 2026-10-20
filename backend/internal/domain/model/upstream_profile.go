@@ -69,8 +69,11 @@ func NormalizeUpstreamProfile(profile UpstreamModelProfile) UpstreamModelProfile
 }
 
 // RegisterUpstreamModelProfile stores the catalog profile for an upstream model
-// slug (without provider prefix). Later registrations replace earlier ones so a
-// catalog refresh always wins.
+// slug (without provider prefix). Accounts share this map. A later sync may
+// expand a real effort menu or raise the context window. It does not replace
+// either with an empty menu, a none-only menu, a narrower menu, or a smaller
+// context window. An empty or none-only menu leaves the static table in place
+// when that table already lists a real effort.
 func RegisterUpstreamModelProfile(upstreamModel string, profile UpstreamModelProfile) {
 	slug := strings.ToLower(externalModelSlug(upstreamModel))
 	if slug == "" {
@@ -78,8 +81,59 @@ func RegisterUpstreamModelProfile(upstreamModel string, profile UpstreamModelPro
 	}
 	normalized := NormalizeUpstreamProfile(profile)
 	upstreamProfilesMu.Lock()
-	upstreamProfiles[slug] = normalized
+	existing, ok := upstreamProfiles[slug]
+	upstreamProfiles[slug] = mergeUpstreamProfile(slug, existing, ok, normalized)
 	upstreamProfilesMu.Unlock()
+}
+
+func mergeUpstreamProfile(slug string, existing UpstreamModelProfile, hasExisting bool, incoming UpstreamModelProfile) UpstreamModelProfile {
+	merged := incoming
+	switch {
+	case !menuHasRealEffort(incoming.ReasoningEfforts):
+		if hasExisting && menuHasRealEffort(existing.ReasoningEfforts) {
+			merged.ReasoningEfforts = append([]string(nil), existing.ReasoningEfforts...)
+			merged.DefaultReasoningEffort = existing.DefaultReasoningEffort
+			merged.SupportsReasoningEffort = existing.SupportsReasoningEffort
+		} else if staticMenuHasRealEffort(slug) {
+			merged.ReasoningEfforts = nil
+			merged.DefaultReasoningEffort = ""
+			merged.SupportsReasoningEffort = false
+		}
+	case hasExisting && menuHasRealEffort(existing.ReasoningEfforts) && !menuCovers(existing.ReasoningEfforts, incoming.ReasoningEfforts):
+		merged.ReasoningEfforts = append([]string(nil), existing.ReasoningEfforts...)
+		merged.DefaultReasoningEffort = existing.DefaultReasoningEffort
+		merged.SupportsReasoningEffort = true
+	}
+	if hasExisting && existing.ContextWindow > merged.ContextWindow {
+		merged.ContextWindow = existing.ContextWindow
+	}
+	return merged
+}
+
+func menuHasRealEffort(efforts []string) bool {
+	for _, effort := range efforts {
+		if effort != "" && effort != ReasoningEffortNone {
+			return true
+		}
+	}
+	return false
+}
+
+func staticMenuHasRealEffort(slug string) bool {
+	return menuHasRealEffort(grokReasoningCapabilities[slug])
+}
+
+func menuCovers(existing, incoming []string) bool {
+	have := make(map[string]struct{}, len(incoming))
+	for _, effort := range incoming {
+		have[effort] = struct{}{}
+	}
+	for _, effort := range existing {
+		if _, ok := have[effort]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // UpstreamProfile returns the registered catalog profile for a model slug.

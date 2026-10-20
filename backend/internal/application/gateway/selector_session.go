@@ -151,7 +151,7 @@ func (session *selectionSession) Acquire(ctx context.Context, excluded map[uint6
 						return nil, err
 					}
 				} else if lease != nil {
-					return session.completeNormalLease(ctx, lease, candidate, excluded)
+					return session.completeNormalLease(ctx, lease, candidate, excluded, nodeQualitySnapshot{})
 				}
 			}
 		}
@@ -194,6 +194,9 @@ func (session *selectionSession) acquireQuotaProbe(ctx context.Context, excluded
 		if session.candidateExcluded(excluded, candidate.Credential.ID) {
 			continue
 		}
+		if session.selector.nodeQuality.blocks(time.Now().UTC(), candidate.Credential.EgressNodeID) {
+			continue
+		}
 		lease, err := session.selector.claimAccountSlot(ctx, candidate.Credential)
 		if err != nil {
 			if errors.Is(err, errRoutingCredentialStale) {
@@ -226,6 +229,11 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 	if len(session.normalCandidates) == 0 {
 		return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts}
 	}
+	snap := session.selector.nodeQuality.snapshot(time.Now().UTC())
+	if snap.active() {
+		session.normalPlan = nil
+		return session.acquireNormalAvoiding(ctx, excluded, snap)
+	}
 	_, _, _, capacityWait := session.selector.routingConfig()
 	if !session.stickyTried && session.stickyKey != "" && session.selector.sticky != nil {
 		session.stickyTried = true
@@ -238,6 +246,9 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 				candidate := session.values[index]
 				if candidate.Credential.ID != stickyID {
 					continue
+				}
+				if session.selector.nodeQuality.blocks(time.Now().UTC(), candidate.Credential.EgressNodeID) {
+					break
 				}
 				lease, err := session.selector.acquirePinnedCapacity(ctx, candidate.Credential)
 				if err != nil {
@@ -254,7 +265,7 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 					capacityWait = 0
 					break
 				}
-				return session.completeNormalLease(ctx, lease, candidate, excluded)
+				return session.completeNormalLease(ctx, lease, candidate, excluded, nodeQualitySnapshot{})
 			}
 		}
 	}
@@ -269,7 +280,7 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 			lease.Release()
 			return nil, errors.New("分段选号缺少候选上下文")
 		}
-		return session.completeNormalLease(ctx, lease, *lease.routingCandidate, excluded)
+		return session.completeNormalLease(ctx, lease, *lease.routingCandidate, excluded, nodeQualitySnapshot{})
 	}
 
 	deadline := time.Now().Add(capacityWait)
@@ -281,8 +292,16 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 			}
 			session.normalPlan = plan
 		}
+		var fallbackCandidate *account.RoutingCandidate
 		for candidate, ok := session.normalPlan.Next(); ok; candidate, ok = session.normalPlan.Next() {
 			if session.candidateExcluded(excluded, candidate.Credential.ID) {
+				continue
+			}
+			if session.selector.nodeQuality.blocks(time.Now().UTC(), candidate.Credential.EgressNodeID) {
+				if fallbackCandidate == nil {
+					held := candidate
+					fallbackCandidate = &held
+				}
 				continue
 			}
 			lease, err := session.selector.claimAccountSlot(ctx, candidate.Credential)
@@ -294,7 +313,16 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 				return nil, err
 			}
 			if lease != nil {
-				return session.completeNormalLease(ctx, lease, candidate, excluded)
+				return session.completeNormalLease(ctx, lease, candidate, excluded, nodeQualitySnapshot{})
+			}
+		}
+		if fallbackCandidate != nil {
+			lease, err := session.selector.claimAccountSlot(ctx, fallbackCandidate.Credential)
+			if err != nil {
+				return nil, err
+			}
+			if lease != nil {
+				return session.completeNormalLease(ctx, lease, *fallbackCandidate, excluded, nodeQualitySnapshot{})
 			}
 		}
 		if !session.hasUnexcludedNormal(excluded) {
@@ -315,7 +343,7 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 	}
 }
 
-func (session *selectionSession) completeNormalLease(ctx context.Context, lease *accountLease, candidate account.RoutingCandidate, excluded map[uint64]bool) (*accountLease, error) {
+func (session *selectionSession) completeNormalLease(ctx context.Context, lease *accountLease, candidate account.RoutingCandidate, excluded map[uint64]bool, snap nodeQualitySnapshot) (*accountLease, error) {
 	if session.stickyKey != "" && session.selector.sticky != nil {
 		stickyTTL, _, _, _ := session.selector.routingConfig()
 		now := time.Now().UTC()
@@ -325,7 +353,11 @@ func (session *selectionSession) completeNormalLease(ctx context.Context, lease 
 			return nil, fmt.Errorf("写入会话粘滞状态: %w", err)
 		}
 		if boundID != candidate.Credential.ID {
-			if boundCandidate, eligible := routingCandidateByID(session.values, session.normalCandidates, boundID); eligible && !session.candidateExcluded(excluded, boundID) {
+			boundCandidate, eligible := routingCandidateByID(session.values, session.normalCandidates, boundID)
+			if eligible && !session.candidateExcluded(excluded, boundID) && snap.blocks(boundCandidate.Credential.EgressNodeID) {
+				eligible = false
+			}
+			if eligible && !session.candidateExcluded(excluded, boundID) {
 				boundLease, acquireErr := session.selector.claimAccountSlot(ctx, boundCandidate.Credential)
 				if acquireErr != nil {
 					if errors.Is(acquireErr, errRoutingCredentialStale) {
@@ -353,6 +385,136 @@ func (session *selectionSession) completeNormalLease(ctx context.Context, lease 
 	lease.Billing = candidate.Billing
 	lease.QuotaMode = effectiveQuotaMode(candidate, session.quotaMode)
 	return lease, nil
+}
+
+// acquireNormalAvoiding applies the current node-quality snapshot to this
+// switch. A preferred account on an open node wins. When every remaining
+// account sits on an avoided node, the original ranking still releases one.
+func (session *selectionSession) acquireNormalAvoiding(ctx context.Context, excluded map[uint64]bool, snap nodeQualitySnapshot) (*accountLease, error) {
+	_, _, _, capacityWait := session.selector.routingConfig()
+	deadline := time.Now().Add(capacityWait)
+	for {
+		indexes, fallback := session.indexesForNodeQuality(excluded, snap)
+		if len(indexes) == 0 {
+			return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts}
+		}
+		if lease, err := session.claimSticky(ctx, excluded, indexes, fallback, snap, &capacityWait); err != nil || lease != nil {
+			return lease, err
+		}
+		activeRequest := session.selector.nextSegmentedActiveRequest(session.provider, session.upstreamModel, session.quotaMode, len(indexes))
+		if activeRequest != nil {
+			lease, err := session.selector.acquireSegmentedCandidates(ctx, session.values, indexes, session.quotaMode, session.selector.resolveTierOrder(session.provider, session.upstreamModel, session.quotaMode), *activeRequest)
+			if err != nil || lease == nil {
+				return lease, err
+			}
+			if lease.routingCandidate == nil {
+				lease.Release()
+				return nil, errors.New("分段选号缺少候选上下文")
+			}
+			return session.finishNormalLease(ctx, lease, *lease.routingCandidate, excluded, snap, fallback)
+		}
+		plan, err := session.selector.planCandidateIndexes(ctx, session.values, indexes, time.Now().UTC(), session.selector.resolveTierOrder(session.provider, session.upstreamModel, session.quotaMode))
+		if err != nil {
+			return nil, err
+		}
+		for candidate, ok := plan.Next(); ok; candidate, ok = plan.Next() {
+			if session.candidateExcluded(excluded, candidate.Credential.ID) {
+				continue
+			}
+			lease, err := session.selector.claimAccountSlot(ctx, candidate.Credential)
+			if err != nil {
+				if errors.Is(err, errRoutingCredentialStale) {
+					session.markCandidateStale(candidate.Credential.ID)
+					continue
+				}
+				return nil, err
+			}
+			if lease == nil {
+				continue
+			}
+			return session.finishNormalLease(ctx, lease, candidate, excluded, snap, fallback)
+		}
+		if !session.hasUnexcludedIndexes(indexes, excluded) {
+			return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts}
+		}
+		if capacityWait <= 0 {
+			return nil, &SelectionUnavailableError{Reason: SelectionSaturated, RetryAfter: time.Second}
+		}
+		retry, err := session.selector.awaitLeaseRetry(ctx, deadline)
+		if err != nil {
+			return nil, err
+		}
+		if !retry {
+			return nil, &SelectionUnavailableError{Reason: SelectionSaturated, RetryAfter: time.Second}
+		}
+		snap = session.selector.nodeQuality.snapshot(time.Now().UTC())
+	}
+}
+
+func (session *selectionSession) indexesForNodeQuality(excluded map[uint64]bool, snap nodeQualitySnapshot) ([]int, bool) {
+	all := session.unexcludedNormalIndexes(excluded)
+	filtered, fallback := filterCandidatesByNodeQuality(session.values, all, snap)
+	if !snap.active() {
+		return all, false
+	}
+	return filtered, fallback
+}
+
+func (session *selectionSession) claimSticky(ctx context.Context, excluded map[uint64]bool, indexes []int, fallback bool, snap nodeQualitySnapshot, capacityWait *time.Duration) (*accountLease, error) {
+	if session.stickyTried || session.stickyKey == "" || session.selector.sticky == nil {
+		return nil, nil
+	}
+	session.stickyTried = true
+	stickyID, ok, err := session.selector.sticky.Get(ctx, session.stickyKey, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("读取会话粘滞状态: %w", err)
+	}
+	if !ok || session.candidateExcluded(excluded, stickyID) {
+		return nil, nil
+	}
+	candidate, found := routingCandidateByID(session.values, indexes, stickyID)
+	if !found {
+		return nil, nil
+	}
+	if !fallback && snap.blocks(candidate.Credential.EgressNodeID) {
+		return nil, nil
+	}
+	lease, err := session.selector.acquirePinnedCapacity(ctx, candidate.Credential)
+	if err != nil {
+		if errors.Is(err, errRoutingCredentialStale) {
+			session.markCandidateStale(stickyID)
+			_ = session.selector.sticky.DeleteByAccount(ctx, stickyID)
+			return nil, nil
+		}
+		if !isSelectionUnavailable(err, SelectionSaturated) {
+			return nil, err
+		}
+		if capacityWait != nil {
+			*capacityWait = 0
+		}
+		return nil, nil
+	}
+	return session.finishNormalLease(ctx, lease, candidate, excluded, snap, fallback)
+}
+
+func (session *selectionSession) finishNormalLease(ctx context.Context, lease *accountLease, candidate account.RoutingCandidate, excluded map[uint64]bool, snap nodeQualitySnapshot, fallback bool) (*accountLease, error) {
+	lease, err := session.completeNormalLease(ctx, lease, candidate, excluded, snap)
+	if err != nil || lease == nil {
+		return lease, err
+	}
+	if !fallback {
+		session.selector.nodeQuality.consumeSkip(snap)
+	}
+	return lease, nil
+}
+
+func (session *selectionSession) hasUnexcludedIndexes(indexes []int, excluded map[uint64]bool) bool {
+	for _, index := range indexes {
+		if !session.candidateExcluded(excluded, session.values[index].Credential.ID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (session *selectionSession) hasUnexcludedNormal(excluded map[uint64]bool) bool {

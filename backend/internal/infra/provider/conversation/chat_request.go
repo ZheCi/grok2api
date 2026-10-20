@@ -18,7 +18,24 @@ func convertChatRequest(body []byte, model string, cache *ReasoningCache, scope 
 	if err := json.Unmarshal(source["messages"], &messages); err != nil || len(messages) == 0 {
 		return nil, ResponseOptions{}, errors.New("messages 必须是非空数组")
 	}
-	input, err := convertChatMessages(messages, cache, scope)
+	var tools []any
+	if raw := source["tools"]; !isEmptyJSON(raw) {
+		var err error
+		tools, err = convertChatTools(raw)
+		if err != nil {
+			return nil, ResponseOptions{}, err
+		}
+	}
+	if !isEmptyJSON(source["web_search_options"]) && !containsToolType(tools, "web_search") {
+		tools = append(tools, map[string]any{"type": "web_search"})
+	}
+	replayCache, replayScope := cache, scope
+	if containsToolType(tools, "web_search") {
+		// Hosted web search rejects an injected reasoning proof. Messages
+		// already drops the cache; Chat must do the same before conversion.
+		replayCache, replayScope = nil, ""
+	}
+	input, err := convertChatMessages(messages, replayCache, replayScope)
 	if err != nil {
 		return nil, ResponseOptions{}, err
 	}
@@ -48,16 +65,6 @@ func convertChatRequest(body []byte, model string, cache *ReasoningCache, scope 
 	if raw := source["reasoning_effort"]; !isEmptyJSON(raw) {
 		target["reasoning"] = mustJSON(map[string]json.RawMessage{"effort": raw})
 	}
-	var tools []any
-	if raw := source["tools"]; !isEmptyJSON(raw) {
-		tools, err = convertChatTools(raw)
-		if err != nil {
-			return nil, ResponseOptions{}, err
-		}
-	}
-	if !isEmptyJSON(source["web_search_options"]) && !containsToolType(tools, "web_search") {
-		tools = append(tools, map[string]any{"type": "web_search"})
-	}
 	if len(tools) > 0 {
 		target["tools"] = mustJSON(tools)
 	}
@@ -69,7 +76,7 @@ func convertChatRequest(body []byte, model string, cache *ReasoningCache, scope 
 		target["tool_choice"] = choice
 	}
 	converted, err := json.Marshal(target)
-	return converted, ResponseOptions{StopSequences: stopSequences}.WithReasoningReplay(cache, scope), err
+	return converted, ResponseOptions{StopSequences: stopSequences}.WithReasoningReplay(replayCache, replayScope), err
 }
 
 func parseChatStopSequences(raw json.RawMessage) ([]string, error) {

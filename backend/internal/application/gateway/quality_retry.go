@@ -64,6 +64,18 @@ type QualityRetryRuntime struct {
 	IdleAccountCooldown             time.Duration
 	MinEncryptedBytes               int
 	EncryptedBytesPerReasoningToken int
+	// WindowFailures is how many quality-degraded attempts on one egress node
+	// inside FailureWindow avoid that node's accounts for AvoidDuration.
+	// Zero disables the window. It does not change the account cooldown.
+	WindowFailures int
+	// FailureWindow is how far back quality-degraded attempts count. Zero uses 1m.
+	FailureWindow time.Duration
+	// AvoidDuration is how long a full window keeps that node's accounts out
+	// of the next selection. Zero uses 5m.
+	AvoidDuration time.Duration
+	// ConsecutiveFailures arms a one-shot skip of that node's accounts on the
+	// next selection. Zero disables it. A real delivery resets the streak.
+	ConsecutiveFailures int
 }
 
 // QualityStreamSignals is the hold classifier input. Tests drive this
@@ -128,6 +140,12 @@ func normalizeQualityRetry(cfg QualityRetryRuntime) QualityRetryRuntime {
 	if cfg.EncryptedBytesPerReasoningToken <= 0 {
 		cfg.EncryptedBytesPerReasoningToken = defaultEncryptedBytesPerReasoningToken
 	}
+	if cfg.FailureWindow <= 0 {
+		cfg.FailureWindow = defaultNodeQualityFailureWindow
+	}
+	if cfg.AvoidDuration <= 0 {
+		cfg.AvoidDuration = defaultNodeQualityAvoidDuration
+	}
 	cfg.OnExhausted = normalizeQualityExhaustionPolicy(cfg.OnExhausted)
 	return cfg
 }
@@ -135,6 +153,9 @@ func normalizeQualityRetry(cfg QualityRetryRuntime) QualityRetryRuntime {
 func (s *Service) UpdateQualityRetry(cfg QualityRetryRuntime) {
 	normalized := normalizeQualityRetry(cfg)
 	s.qualityRetry.Store(&normalized)
+	if s != nil && s.selector != nil {
+		s.selector.SetNodeQualityLimits(normalized.WindowFailures, normalized.ConsecutiveFailures, normalized.FailureWindow, normalized.AvoidDuration)
+	}
 }
 
 func (s *Service) qualityRetryConfig() QualityRetryRuntime {
@@ -322,15 +343,9 @@ func ClassifyQualityHold(sig QualityStreamSignals, minOutput int64) QualityVerdi
 	if enough {
 		return QualityWithhold
 	}
-	if sig.HoldExpired {
-		if output <= 0 {
-			return QualityWait
-		}
-		if enough {
-			return QualityWithhold
-		}
-		return QualityDeliver
-	}
+	// The hold timer does not make a short prefix a finished reply. Delivering
+	// here would forward the rest of the stream with no further check. A
+	// genuinely short answer still delivers from the terminal branch above.
 	return QualityWait
 }
 

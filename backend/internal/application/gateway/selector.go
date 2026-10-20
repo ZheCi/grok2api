@@ -282,6 +282,7 @@ type Selector struct {
 	excludeBuildBotFlagged bool
 	segmentedConfig        segmentedSelectorConfig
 	segmentedState         segmentedSelectorState
+	nodeQuality            nodeQualityAvoidance
 	configMu               sync.RWMutex
 	candidateMu            sync.Mutex
 	selectionMu            sync.RWMutex
@@ -318,7 +319,7 @@ func NewSelector(accounts repository.AccountRepository, concurrency repository.C
 	if len(capacityWait) > 0 && capacityWait[0] > 0 {
 		wait = capacityWait[0]
 	}
-	return &Selector{accounts: accounts, concurrency: concurrency, sticky: sticky, tierOrders: tierOrders, stickyTTL: stickyTTL, cooldownBase: cooldownBase, cooldownMax: cooldownMax, capacityWait: wait, leaseWake: make(chan struct{}), logger: slog.Default(), lastSelectedAt: make(map[uint64]time.Time), lastSuccessAt: make(map[uint64]time.Time), healthOverrides: make(map[uint64]routingHealthOverride), quotaConsumed: make(map[quotaConsumptionKey]int), staleFallbackLoggedAt: make(map[string]time.Time), candidates: make(map[candidateCacheKey]candidateSnapshot), routingBases: make(map[routingBaseCacheKey]routingBaseSnapshot), routingOverlays: make(map[routingOverlayCacheKey]routingOverlaySnapshot), routingAccountProvider: make(map[uint64]account.Provider), baseProviderVersion: make(map[account.Provider]uint64), overlayProviderVersion: make(map[account.Provider]uint64), concurrencySnapshots: resultcache.New[[32]byte, map[string]int](maxConcurrencySnapshots, concurrencySnapshotTTL)}
+	return &Selector{accounts: accounts, concurrency: concurrency, sticky: sticky, tierOrders: tierOrders, stickyTTL: stickyTTL, cooldownBase: cooldownBase, cooldownMax: cooldownMax, capacityWait: wait, leaseWake: make(chan struct{}), logger: slog.Default(), lastSelectedAt: make(map[uint64]time.Time), lastSuccessAt: make(map[uint64]time.Time), healthOverrides: make(map[uint64]routingHealthOverride), quotaConsumed: make(map[quotaConsumptionKey]int), staleFallbackLoggedAt: make(map[string]time.Time), candidates: make(map[candidateCacheKey]candidateSnapshot), routingBases: make(map[routingBaseCacheKey]routingBaseSnapshot), routingOverlays: make(map[routingOverlayCacheKey]routingOverlaySnapshot), routingAccountProvider: make(map[uint64]account.Provider), baseProviderVersion: make(map[account.Provider]uint64), overlayProviderVersion: make(map[account.Provider]uint64), concurrencySnapshots: resultcache.New[[32]byte, map[string]int](maxConcurrencySnapshots, concurrencySnapshotTTL), nodeQuality: nodeQualityAvoidance{nodes: make(map[uint64]*nodeQualityState)}}
 }
 
 // SetLogger wires the application logger into routing degradation diagnostics.
@@ -577,6 +578,12 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 			return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts}
 		}
 	}
+	nodeSnap := s.nodeQuality.snapshot(time.Now().UTC())
+	nodeFallback := false
+	applyNodeQuality := forcedEgressNodeID == 0 && nodeSnap.active()
+	if applyNodeQuality {
+		normalCandidates, nodeFallback = filterCandidatesByNodeQuality(values, normalCandidates, nodeSnap)
+	}
 	var saturatedStickyID uint64
 	if stickyKey != "" {
 		stickyID, ok, err := s.sticky.Get(ctx, stickyKey, now)
@@ -600,6 +607,7 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 					if acquireErr == nil {
 						lease.Billing = candidate.Billing
 						lease.QuotaMode = effectiveQuotaMode(candidate, quotaMode)
+						s.finishNodeQualitySelection(applyNodeQuality, nodeFallback, nodeSnap)
 						return lease, nil
 					}
 					if errors.Is(acquireErr, errRoutingCredentialStale) {
@@ -636,6 +644,7 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 			}
 			lease.Billing = candidate.Billing
 			lease.QuotaMode = effectiveQuotaMode(candidate, quotaMode)
+			s.finishNodeQualitySelection(applyNodeQuality, nodeFallback, nodeSnap)
 			return lease, nil
 		}
 		return nil, &SelectionUnavailableError{Reason: SelectionSaturated, RetryAfter: time.Second}
@@ -643,14 +652,23 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 	activeRequest := s.nextSegmentedActiveRequest(provider, upstreamModel, quotaMode, len(normalCandidates))
 	if activeRequest != nil {
 		lease, acquireErr := s.acquireSegmentedCandidates(ctx, values, normalCandidates, quotaMode, s.resolveTierOrder(provider, upstreamModel, quotaMode), *activeRequest)
-		if acquireErr != nil || lease == nil || stickyKey == "" {
+		if acquireErr != nil || lease == nil {
 			return lease, acquireErr
 		}
-		if lease.routingCandidate == nil {
+		if stickyKey != "" && lease.routingCandidate == nil {
 			lease.Release()
 			return nil, errors.New("分段选号缺少候选上下文")
 		}
-		return s.completeStickyLease(ctx, stickyKey, values, normalCandidates, *lease.routingCandidate, lease, quotaMode)
+		if stickyKey == "" {
+			s.finishNodeQualitySelection(applyNodeQuality, nodeFallback, nodeSnap)
+			return lease, nil
+		}
+		lease, stickyErr := s.completeStickyLease(ctx, stickyKey, values, normalCandidates, *lease.routingCandidate, lease, quotaMode)
+		if stickyErr != nil {
+			return nil, stickyErr
+		}
+		s.finishNodeQualitySelection(applyNodeQuality, nodeFallback, nodeSnap)
+		return lease, nil
 	}
 	_, _, _, capacityWait := s.routingConfig()
 	waitDeadline := time.Now().Add(capacityWait)
@@ -675,7 +693,12 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 				capacityMisses++
 				continue
 			}
-			return s.completeStickyLease(ctx, stickyKey, values, normalCandidates, candidate, lease, quotaMode)
+			lease, stickyErr := s.completeStickyLease(ctx, stickyKey, values, normalCandidates, candidate, lease, quotaMode)
+			if stickyErr != nil {
+				return nil, stickyErr
+			}
+			s.finishNodeQualitySelection(applyNodeQuality, nodeFallback, nodeSnap)
+			return lease, nil
 		}
 		if staleClaims > 0 && capacityMisses == 0 {
 			return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts}
@@ -703,7 +726,7 @@ func (s *Selector) completeStickyLease(ctx context.Context, stickyKey string, va
 			return nil, fmt.Errorf("写入会话粘滞状态: %w", err)
 		}
 		if boundID != candidate.Credential.ID {
-			if boundCandidate, eligible := routingCandidateByID(values, normalCandidates, boundID); eligible {
+			if boundCandidate, eligible := routingCandidateByID(values, normalCandidates, boundID); eligible && !s.nodeQuality.blocks(time.Now().UTC(), boundCandidate.Credential.EgressNodeID) {
 				boundLease, acquireErr := s.acquirePinnedCapacity(ctx, boundCandidate.Credential)
 				if acquireErr == nil {
 					lease.Release()
@@ -1559,6 +1582,74 @@ func (s *Selector) applyHealthInvalidation(event repository.InvalidationEvent) {
 	}
 	s.healthOverrides[event.AccountID] = value
 	s.healthMu.Unlock()
+}
+
+// suppressNodeAccounts keeps every cached account on nodeID out of selection
+// until the avoid window ends. The node snapshot is also checked at acquire
+// time; this cooldown is what the candidate builder already honors, so a
+// later request cannot keep walking other accounts on the same node.
+func (s *Selector) suppressNodeAccounts(nodeID uint64, until time.Time) {
+	if s == nil || nodeID == 0 || !until.After(time.Now()) {
+		return
+	}
+	type held struct {
+		provider account.Provider
+		id       uint64
+		failures int
+	}
+	seen := map[uint64]held{}
+	s.candidateMu.Lock()
+	for _, snapshot := range s.candidates {
+		for _, candidate := range snapshot.values {
+			if candidate.Credential.EgressNodeID != nodeID {
+				continue
+			}
+			seen[candidate.Credential.ID] = held{
+				provider: candidate.Credential.Provider,
+				id:       candidate.Credential.ID,
+				failures: candidate.Credential.FailureCount,
+			}
+		}
+	}
+	for _, snapshot := range s.routingBases {
+		for _, base := range snapshot.values {
+			if base.Credential.EgressNodeID != nodeID {
+				continue
+			}
+			if _, ok := seen[base.Credential.ID]; ok {
+				continue
+			}
+			seen[base.Credential.ID] = held{
+				provider: base.Credential.Provider,
+				id:       base.Credential.ID,
+				failures: base.Credential.FailureCount,
+			}
+		}
+	}
+	s.candidateMu.Unlock()
+	for _, item := range seen {
+		s.holdAccountForNodeAvoid(item.provider, item.id, item.failures, until)
+	}
+}
+
+func (s *Selector) holdAccountForNodeAvoid(provider account.Provider, accountID uint64, failureCount int, until time.Time) {
+	if provider == "" || accountID == 0 || !until.After(time.Now()) {
+		return
+	}
+	deadline := until.UTC()
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	current, exists := s.healthOverrides[accountID]
+	if exists && current.provider == provider && current.cooldownUntil != nil && !current.cooldownUntil.Before(deadline) {
+		return
+	}
+	if exists && current.failureCount > failureCount {
+		failureCount = current.failureCount
+	}
+	s.healthOverrides[accountID] = routingHealthOverride{
+		provider: provider, failureCount: failureCount, cooldownUntil: &deadline,
+		lastError: "node_quality_avoid", updatedAt: time.Now().UTC(), expiresAt: deadline,
+	}
 }
 
 func (s *Selector) applyRoutingHealth(value account.Credential, now time.Time) account.Credential {

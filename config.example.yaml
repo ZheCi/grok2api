@@ -175,3 +175,10 @@ qualityGuard:
     idleAccountCooldown: 15m
     minEncryptedBytes: 256
     encryptedBytesPerReasoningToken: 4
+    # 节点降智避开。failureWindow 内达到 windowFailures 次后，avoidDuration 内不再切到该节点的账号。
+    # 连续达到 consecutiveFailures 次后，只挡住下一次切号。0 表示关闭对应规则。
+    # 没有其他节点可切时仍按原排序放行一个账号。时长写 0 时使用 1m 和 5m。
+    windowFailures: 3
+    consecutiveFailures: 2
+    failureWindow: 1m
+    avoidDuration: 5m

@@ -353,9 +353,27 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 		} else {
 			fallbackBase := a.fallbackBaseURL()
 			if fallbackBase != "" && !strings.EqualFold(fallbackBase, base) {
-				fallbackBody, fallbackReplayKey := a.applyReasoningReplay(ctx, request, replayBaseBody, fallbackBase)
-				fallbackCtx := infraegress.WithPhysicalCallStage(ctx, "plane_fallback")
-				fallbackResp, fallbackURL, fallbackErr := a.doResponseRequest(fallbackCtx, request, accessToken, fallbackBody, fallbackBase)
+				fallbackSource := replayBaseBody
+				fallbackConversation := conversationOptions
+				var rebuildErr error
+				if request.NormalizeBody && (request.Operation == conversation.OperationChat || request.Operation == conversation.OperationMessages) {
+					// replayBaseBody already contains proofs minted for the Build
+					// plane. Rebuild the chat or messages body for the XAI plane
+					// before applying that plane's durable replay key.
+					fallbackSource, fallbackConversation, rebuildErr = a.conversationFallbackBody(request, fallbackBase)
+				}
+				var fallbackBody []byte
+				var fallbackReplayKey string
+				var fallbackResp *http.Response
+				var fallbackURL string
+				var fallbackErr error
+				if rebuildErr != nil {
+					fallbackErr = rebuildErr
+				} else {
+					fallbackBody, fallbackReplayKey = a.applyReasoningReplay(ctx, request, fallbackSource, fallbackBase)
+					fallbackCtx := infraegress.WithPhysicalCallStage(ctx, "plane_fallback")
+					fallbackResp, fallbackURL, fallbackErr = a.doResponseRequest(fallbackCtx, request, accessToken, fallbackBody, fallbackBase)
+				}
 				if fallbackErr == nil {
 					fallbackErr = normalizeGzipResponse(fallbackResp)
 				}
@@ -367,7 +385,7 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 					recoveredPrimaryFailure = bufferedFailureDiagnostic(primaryResp, primaryBody, primaryTruncated)
 					a.activateBuildAPIFallback(ctx, &request.Credential)
 					resp, reqURL, base, body, replayKey = fallbackResp, fallbackURL, fallbackBase, fallbackBody, fallbackReplayKey
-					conversationOptions = conversationOptions.WithReasoningReplay(a.conversationReasoningCache, a.conversationReasoningScope(request, base))
+					conversationOptions = fallbackConversation.WithReasoningReplay(a.conversationReasoningCache, a.conversationReasoningScope(request, base))
 					reasoningRecovery = reasoningRecovery.merge(fallbackRecovery)
 				} else {
 					if fallbackErr == nil {
@@ -520,6 +538,33 @@ func (a *Adapter) applyReasoningReplay(ctx context.Context, request provider.Res
 	return a.replay.Apply(ctx, request.Model, key, body), key
 }
 
+func (a *Adapter) conversationFallbackBody(request provider.ResponseResourceRequest, base string) ([]byte, conversation.ResponseOptions, error) {
+	scope := a.conversationReasoningScope(request, base)
+	body, options, err := conversation.ConvertRequestWithReasoningReplay(request.Body, request.Model, request.Operation, a.conversationReasoningCache, scope)
+	if err != nil {
+		return nil, conversation.ResponseOptions{}, err
+	}
+	if options.ReasoningEffortSet && request.NormalizedMetadata != nil {
+		request.NormalizedMetadata.ReasoningEffort = options.ReasoningEffort
+	}
+	body, err = normalizeBuildRequestWithMetadata(body, request.Model, request.Operation, request.NormalizedMetadata)
+	if err != nil {
+		return nil, conversation.ResponseOptions{}, err
+	}
+	if len(body) > 0 && request.Method == http.MethodPost {
+		allowClientTools := request.AllowClientToolCacheRoute || (account.RoutingCandidate{Credential: request.Credential, Billing: request.Billing}).IsKnownFreeBuild()
+		body, _, err = prepareBuildPromptCacheRoute(body, request.Operation, request.Model, request.PromptCacheKey, allowClientTools)
+		if err != nil {
+			return nil, conversation.ResponseOptions{}, err
+		}
+		body, err = injectPromptCacheKey(body, request.PromptCacheKey)
+		if err != nil {
+			return nil, conversation.ResponseOptions{}, err
+		}
+	}
+	return body, options, nil
+}
+
 func (a *Adapter) conversationReasoningScope(request provider.ResponseResourceRequest, base string) string {
 	seed := strings.TrimSpace(request.ReasoningReplayKey)
 	model := strings.ToLower(strings.TrimSpace(request.Model))
@@ -530,7 +575,10 @@ func (a *Adapter) conversationReasoningScope(request provider.ResponseResourceRe
 	if fallback := a.fallbackBaseURL(); fallback != "" && strings.EqualFold(strings.TrimRight(base, "/"), fallback) {
 		plane = "xai"
 	}
-	digest := sha256.Sum256([]byte(fmt.Sprintf("grok2api:conversation-reasoning:v1:%s:%s:%s", seed, model, plane)))
+	if request.Credential.ID == 0 {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(fmt.Sprintf("grok2api:conversation-reasoning:v2:%s:%d:%s:%s", seed, request.Credential.ID, model, plane)))
 	return hex.EncodeToString(digest[:])
 }
 

@@ -204,10 +204,10 @@ func applyBuildResponseDefaults(payload map[string]json.RawMessage) (bool, error
 
 // normalizeBuildReasoningEffortPayload maps client aliases to levels accepted by
 // the selected Grok model. grok-build treats minimal/xhigh/max as distinct wire
-// tiers, so a tier the model's catalog menu lists is forwarded verbatim. Only
-// tiers the model does not offer are folded onto the nearest offered level:
-// minimal -> low, max -> xhigh -> high. Grok 4.5 and unknown models therefore
-// retain the proven defensive xhigh/max -> high behavior.
+// tiers, so a tier the model's catalog menu lists is forwarded verbatim. A tier
+// the model does not offer folds onto the nearest offered level: minimal -> low,
+// max -> xhigh -> high. If none of those levels is offered, the requested tier
+// stays unchanged instead of being rewritten to an unoffered fallback.
 func normalizeBuildReasoningEffortPayload(payload map[string]json.RawMessage, model string) bool {
 	raw, exists := payload["reasoning"]
 	if !exists || isEmptyJSON(raw) {
@@ -256,16 +256,20 @@ func normalizeBuildReasoningEffortPayload(payload map[string]json.RawMessage, mo
 	return true
 }
 
-// foldBuildReasoningEffort returns the first candidate tier the model offers,
-// falling back to the last candidate when none is offered. Candidates are
-// ordered from the requested tier down to the proven safe level.
+// foldBuildReasoningEffort returns the first candidate tier the model offers.
+// Candidates are ordered from the requested tier down to the nearest safe
+// level. When the model offers none of them, the requested tier is returned
+// unchanged.
 func foldBuildReasoningEffort(model string, candidates ...string) string {
 	for _, candidate := range candidates {
 		if modeldomain.SupportsReasoningEffort(model, candidate) {
 			return candidate
 		}
 	}
-	return candidates[len(candidates)-1]
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0]
 }
 
 // patchReasoningTextTypes 对齐官方 CLI 的序列化后修补：Responses 上游要求
