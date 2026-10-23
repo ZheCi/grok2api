@@ -22,6 +22,24 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestOrderNodeAvoidanceByRemaining(t *testing.T) {
+	now := time.Date(2026, 10, 22, 3, 0, 0, 0, time.UTC)
+	long := now.Add(30 * time.Minute)
+	short := now.Add(5 * time.Minute)
+	items := []nodeAvoidanceItem{
+		{ID: "1", Name: "b", Status: "healthy"},
+		{ID: "2", Name: "a", Status: "disabled"},
+		{ID: "3", Name: "z", Status: "avoiding", AvoidUntil: &short},
+		{ID: "4", Name: "m", Status: "avoiding", AvoidUntil: &long},
+	}
+	orderNodeAvoidance(items, now)
+	got := []string{items[0].ID, items[1].ID, items[2].ID, items[3].ID}
+	want := []string{"4", "3", "1", "2"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+}
+
 func TestQualityLeaseCursorRoundTripAndValidation(t *testing.T) {
 	want := accountdomain.EgressLeaseBlock{
 		AccountID:     42,

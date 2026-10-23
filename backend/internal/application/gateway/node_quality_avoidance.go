@@ -242,6 +242,31 @@ func (a *nodeQualityAvoidance) inspect(nodeID uint64) nodeQualityState {
 	return copyState
 }
 
+// avoidUntil reports nodes whose timed avoidance is still in the future.
+// A one-shot skip has no deadline and is omitted.
+func (a *nodeQualityAvoidance) avoidUntil(now time.Time) map[uint64]time.Time {
+	out := map[uint64]time.Time{}
+	if a == nil {
+		return out
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id, state := range a.nodes {
+		if state == nil || state.avoidUntilUnix <= 0 || now.UnixNano() >= state.avoidUntilUnix {
+			continue
+		}
+		out[id] = state.avoidUntil
+	}
+	return out
+}
+
+func (s *Service) NodeAvoidanceUntil(now time.Time) map[uint64]time.Time {
+	if s == nil || s.selector == nil {
+		return map[uint64]time.Time{}
+	}
+	return s.selector.nodeQuality.avoidUntil(now)
+}
+
 func (s *Selector) SetNodeQualityLimits(windowFailures, consecutiveFailures int, failureWindow, avoidDuration time.Duration) {
 	if s == nil {
 		return

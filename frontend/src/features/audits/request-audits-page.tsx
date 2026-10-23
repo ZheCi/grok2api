@@ -208,6 +208,7 @@ export function RequestAuditsPage() {
       summaryQuery.refetch(),
       callStatusQuery.refetch(),
       queryClient.refetchQueries({ queryKey: ["request-audits", "call-status"] }),
+      queryClient.refetchQueries({ queryKey: ["egress-nodes", "avoidance"] }),
       new Promise<void>((resolve) => window.setTimeout(resolve, 400)),
     ]).finally(() => {
       forceSummaryRefresh.current = false;

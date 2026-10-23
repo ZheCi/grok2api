@@ -55,6 +55,27 @@ func TestNodeQualityWindowAvoidsForFiveMinutes(t *testing.T) {
 	}
 }
 
+func TestNodeAvoidanceUntilKeepsOnlyTimedWindows(t *testing.T) {
+	now := time.Date(2026, 10, 22, 1, 0, 0, 0, time.UTC)
+	timed := &nodeQualityAvoidance{nodes: map[uint64]*nodeQualityState{}}
+	timed.setPolicy(1, 0, time.Minute, 30*time.Minute)
+	timed.noteDegraded(7, now)
+	got := timed.avoidUntil(now)
+	if !got[7].Equal(now.Add(30 * time.Minute)) {
+		t.Fatalf("avoidUntil = %s", got[7])
+	}
+	if _, ok := timed.avoidUntil(now.Add(30*time.Minute))[7]; ok {
+		t.Fatal("expired avoidance must drop out of the listing")
+	}
+
+	skip := &nodeQualityAvoidance{nodes: map[uint64]*nodeQualityState{}}
+	skip.setPolicy(0, 1, time.Minute, 30*time.Minute)
+	skip.noteDegraded(9, now)
+	if _, ok := skip.avoidUntil(now)[9]; ok {
+		t.Fatal("a one-shot skip has no avoid time")
+	}
+}
+
 func TestNodeQualityDurationsFollowPolicy(t *testing.T) {
 	avoidance := &nodeQualityAvoidance{nodes: map[uint64]*nodeQualityState{}}
 	avoidance.setPolicy(2, 0, 30*time.Second, 2*time.Minute)

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ type Handler struct {
 	guardStateMu    sync.Mutex
 	guardStateCache qualityGuardStateCache
 	profilesMu      sync.Mutex
+	nodeAvoidance   func(time.Time) map[uint64]time.Time
 }
 
 func NewHandler(service *egressapp.Service, guardStatePath ...string) *Handler {
@@ -52,6 +54,11 @@ func (h *Handler) WithQualityGuardProbe(input egressapp.QualityProbeInput) *Hand
 	return h
 }
 
+func (h *Handler) WithNodeAvoidance(fn func(time.Time) map[uint64]time.Time) *Handler {
+	h.nodeAvoidance = fn
+	return h
+}
+
 func (h *Handler) Register(router *gin.RouterGroup) {
 	router.GET("/egress-proxy-profiles", h.listProxyProfiles)
 	router.GET("/egress-proxy-profiles/:id", h.getProxyProfile)
@@ -60,6 +67,7 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.DELETE("/egress-proxy-profiles/:id", h.deleteProxyProfile)
 	router.POST("/egress-proxy-profiles/:id/proxy-url/reveal", h.proxyProfileURL)
 	router.GET("/egress-nodes", h.list)
+	router.GET("/egress-nodes/avoidance", h.listNodeAvoidance)
 	router.POST("/egress-nodes", h.create)
 	router.PATCH("/egress-nodes/batch", h.updateMany)
 	router.DELETE("/egress-nodes", h.deleteMany)
@@ -924,6 +932,81 @@ func legacyEgressListRequest(c *gin.Context) bool {
 		return false
 	}
 	return c.Query("search") == "" && c.Query("enabled") == "" && c.Query("probe") == "" && c.Query("assignment") == ""
+}
+
+type nodeAvoidanceItem struct {
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	Status     string     `json:"status"`
+	AvoidUntil *time.Time `json:"avoidUntil,omitempty"`
+}
+
+func (h *Handler) listNodeAvoidance(c *gin.Context) {
+	if h.service == nil {
+		response.Success(c, http.StatusOK, gin.H{"items": []nodeAvoidanceItem{}})
+		return
+	}
+	nodes, err := h.service.ListAll(c.Request.Context(), "", repository.SortQuery{})
+	if h.writeListError(c, err) {
+		return
+	}
+	now := time.Now().UTC()
+	until := map[uint64]time.Time{}
+	if h.nodeAvoidance != nil {
+		until = h.nodeAvoidance(now)
+	}
+	items := make([]nodeAvoidanceItem, 0, len(nodes))
+	for _, node := range nodes {
+		item := nodeAvoidanceItem{ID: strconv.FormatUint(node.ID, 10), Name: node.Name, Status: "healthy"}
+		if deadline, ok := until[node.ID]; ok && deadline.After(now) {
+			item.Status = "avoiding"
+			deadline = deadline.UTC()
+			item.AvoidUntil = &deadline
+		} else if !node.Enabled {
+			item.Status = "disabled"
+		}
+		items = append(items, item)
+	}
+	orderNodeAvoidance(items, now)
+	response.Success(c, http.StatusOK, gin.H{"items": items})
+}
+
+func orderNodeAvoidance(items []nodeAvoidanceItem, now time.Time) {
+	sort.SliceStable(items, func(i, j int) bool {
+		left, right := items[i], items[j]
+		if leftRemaining, rightRemaining := avoidRemaining(left, now), avoidRemaining(right, now); leftRemaining != rightRemaining {
+			return leftRemaining > rightRemaining
+		}
+		if leftRank, rightRank := nodeAvoidanceRank(left.Status), nodeAvoidanceRank(right.Status); leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		if left.Name != right.Name {
+			return left.Name < right.Name
+		}
+		return left.ID < right.ID
+	})
+}
+
+func avoidRemaining(item nodeAvoidanceItem, now time.Time) time.Duration {
+	if item.Status != "avoiding" || item.AvoidUntil == nil {
+		return 0
+	}
+	remaining := item.AvoidUntil.Sub(now)
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+func nodeAvoidanceRank(status string) int {
+	switch status {
+	case "avoiding":
+		return 0
+	case "healthy":
+		return 1
+	default:
+		return 2
+	}
 }
 
 func (h *Handler) writeListError(c *gin.Context, err error) bool {
