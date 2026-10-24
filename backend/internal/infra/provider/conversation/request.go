@@ -27,6 +27,7 @@ func ConvertRequestWithOptions(body []byte, model, operation string) ([]byte, Re
 
 // ConvertRequestWithReasoningReplay converts Chat or Messages requests and,
 // when scope is set, restores tool-call reasoning proofs from cache.
+// The scope must include the client session and the upstream plane.
 func ConvertRequestWithReasoningReplay(body []byte, model, operation string, cache *ReasoningCache, scope string) ([]byte, ResponseOptions, error) {
 	switch operation {
 	case OperationChat:

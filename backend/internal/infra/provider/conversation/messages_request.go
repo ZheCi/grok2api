@@ -45,12 +45,13 @@ func convertMessagesRequest(body []byte, model string, cache *ReasoningCache, sc
 			return nil, ResponseOptions{}, fmt.Errorf("不支持 thinking.type=%q", request.Thinking.Type)
 		}
 	}
+	// Hosted web search has a separate server-side history contract. The
+	// gateway does not bridge opaque reasoning for these turns, so disable
+	// the bridge before converting messages.
 	hasWebSearchTool := hasAnthropicWebSearchTool(request.Tools)
 	webSearchEnabled := hasWebSearchTool && (request.ToolChoice == nil || !strings.EqualFold(strings.TrimSpace(request.ToolChoice.Type), "none"))
 	replayCache, replayScope := cache, scope
 	if webSearchEnabled {
-		// Hosted web search already carries its own tool state. Replaying an
-		// opaque reasoning proof into that request is rejected upstream.
 		replayCache, replayScope = nil, ""
 	}
 	input, inlineInstructions, err := convertAnthropicMessages(request.Messages, anthropicDeclaredToolNames(request.Tools), replayCache, replayScope)
@@ -198,6 +199,9 @@ func convertAnthropicMessages(messages []anthropicMessage, declaredTools map[str
 	serverSearches := make(map[string]map[string]any)
 	seenReasoningIDs := make(map[string]struct{})
 	seenReasoningEncrypted := make(map[string]struct{})
+	// A client may preserve an Anthropic thinking block in a different order
+	// from the tool_use block. Pre-scan explicit signatures so a cached bridge
+	// item is not emitted and then duplicated later in the same history.
 	explicitReasoningEncrypted := anthropicExplicitReasoningProofs(messages)
 	appendCachedReasoning := func(item responseItem) {
 		if item.ID == "" || item.Encrypted == "" || reasoningAlreadyEmitted(seenReasoningIDs, seenReasoningEncrypted, item) {
@@ -340,6 +344,7 @@ func convertAnthropicMessages(messages []anthropicMessage, declaredTools map[str
 					item["encrypted_content"] = signature
 				}
 				input = append(input, item)
+				markReasoningEmitted(seenReasoningIDs, seenReasoningEncrypted, responseItem{Encrypted: signature})
 			case "redacted_thinking":
 				if role != "assistant" {
 					return nil, nil, fmt.Errorf("%s redacted_thinking 只允许出现在 assistant 消息", path)
@@ -352,6 +357,7 @@ func convertAnthropicMessages(messages []anthropicMessage, declaredTools map[str
 				// Grok Build requires summary to exist whenever encrypted_content is replayed.
 				// An empty array is the canonical Anthropic redacted_thinking representation.
 				input = append(input, map[string]any{"type": "reasoning", "summary": []any{}, "encrypted_content": data})
+				markReasoningEmitted(seenReasoningIDs, seenReasoningEncrypted, responseItem{Encrypted: data})
 			case "server_tool_use":
 				if role != "assistant" {
 					continue

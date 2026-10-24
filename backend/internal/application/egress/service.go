@@ -1399,6 +1399,9 @@ func NormalizeProxyURL(value string) (string, error) {
 		return "", errors.New("代理地址包含保留的账号占位符文本")
 	}
 	parseValue := strings.ReplaceAll(value, ProxyAccountPlaceholder, proxyAccountSentinel)
+	if normalized, ok := normalizeLegacyHTTPProxy(parseValue); ok {
+		parseValue = normalized
+	}
 	parsed, err := url.Parse(parseValue)
 	if err != nil {
 		return "", errors.New("代理地址格式无效")
@@ -1445,6 +1448,8 @@ func normalizeLegacyHTTPProxy(value string) (string, bool) {
 	}
 	// Keep {account} literal. UserPassword encodes braces, and account-bound
 	// proxies are detected by that exact placeholder after normalization.
+	// Passwords may contain extra colons; SplitN above keeps them in parts[3],
+	// and UserPassword preserves @ and other reserved characters.
 	username := strings.ReplaceAll(parts[2], ProxyAccountPlaceholder, proxyAccountSentinel)
 	password := strings.ReplaceAll(parts[3], ProxyAccountPlaceholder, proxyAccountSentinel)
 	encoded := (&url.URL{

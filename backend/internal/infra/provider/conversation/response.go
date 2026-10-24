@@ -21,14 +21,15 @@ type ResponseOptions struct {
 	Include []string
 	// InlineCitations overrides Include when non-nil.
 	InlineCitations *bool
-	// reasoningCache is the in-process Chat/Messages tool-call bridge.
-	// It is separate from the persistent Responses replay in pkg/reasoningreplay.
+	// reasoningCache and reasoningScope are the in-process Chat/Messages tool-call
+	// bridge. They are populated only for a trusted client-session and plane,
+	// and stay separate from the persistent Responses replay.
 	reasoningCache *ReasoningCache
 	reasoningScope string
 }
 
-// WithReasoningReplay attaches the Chat/Messages tool-call cache. An empty
-// scope disables restoration and capture.
+// WithReasoningReplay attaches a provider-owned, scoped reasoning cache.
+// An empty scope disables restoration and capture.
 func (o ResponseOptions) WithReasoningReplay(cache *ReasoningCache, scope string) ResponseOptions {
 	o.reasoningCache = cache
 	o.reasoningScope = scope
@@ -140,9 +141,7 @@ func ConvertResponseJSONWithOptions(body []byte, operation string, options Respo
 		}
 		return body, nil
 	}
-	if options.reasoningCache != nil {
-		options.reasoningCache.RememberReasoningForEnvelope(options.reasoningScope, envelope)
-	}
+	options.reasoningCache.RememberReasoningForEnvelope(options.reasoningScope, envelope)
 	parsed := parseResponse(envelope)
 	if operation == OperationMessages || operation == OperationChat {
 		parsed.Text, parsed.StopSequence = applyStopSequences(parsed.Text, options.StopSequences)

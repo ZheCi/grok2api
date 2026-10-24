@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -197,11 +198,16 @@ func ObserveQualityChunk(state *qualityScanState, chunk []byte) {
 			state.reasoningStarted = true
 			continue
 		}
-		if bytes.Equal(line, []byte(qualityReasoningEvidenceSSEComment)) {
+		if bytes.HasPrefix(line, []byte(qualityReasoningEvidenceSSEComment)) {
 			// Protocol converters cannot expose encrypted_content in every public
-			// JSON contract. This internal SSE comment preserves that evidence.
+			// JSON contract. The comment is `: grok2api-reasoning-evidence <bytes>`.
 			state.reasoningStarted = true
 			state.hasThinking = true
+			if fields := bytes.Fields(line); len(fields) >= 2 {
+				if n, err := strconv.Atoi(string(fields[len(fields)-1])); err == nil && n > state.encryptedBytes {
+					state.encryptedBytes = n
+				}
+			}
 			continue
 		}
 		if !bytes.HasPrefix(line, []byte("data:")) {

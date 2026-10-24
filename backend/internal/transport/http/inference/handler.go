@@ -1328,6 +1328,25 @@ func (h *Handler) writeProtocolResult(c *gin.Context, result *gateway.Result, st
 			}
 			return
 		}
+	} else if result.StatusCode >= 400 && stream && !isEventStreamContentType(result.Header.Get("Content-Type")) {
+		errorCode = "upstream_error"
+		raw, readErr := io.ReadAll(io.LimitReader(result.Body, maxJSONResponseTransferBytes+1))
+		if readErr != nil {
+			if anthropic {
+				writeAnthropicError(c, http.StatusBadGateway, "api_error", "读取上游错误响应失败", "upstream_error")
+			} else {
+				writeOpenAIError(c, http.StatusBadGateway, "upstream_error", "读取上游错误响应失败")
+			}
+			return
+		}
+		code, message := gateway.ClassifyUpstreamHTTPError(result.StatusCode, raw)
+		errorCode = code
+		if anthropic {
+			writeAnthropicError(c, result.StatusCode, anthropicUpstreamHTTPErrorType(result.StatusCode), message, errorCode)
+		} else {
+			writeOpenAIError(c, result.StatusCode, errorCode, message)
+		}
+		return
 	} else {
 		copyHeaders(c.Writer.Header(), result.Header)
 		c.Status(result.StatusCode)
@@ -1347,22 +1366,54 @@ func (h *Handler) writeProtocolResult(c *gin.Context, result *gateway.Result, st
 		usage, responseID, err = metadata.Usage, metadata.ResponseID, copyErr
 	}
 	if err != nil {
-		switch {
-		case errors.Is(err, errResponseTransferLimit):
-			errorCode = "response_too_large"
-		case errors.Is(err, errUpstreamStreamFailed):
-			errorCode = "upstream_stream_error"
-		case errors.Is(err, errUpstreamStreamIncomplete):
-			errorCode = "upstream_stream_incomplete"
-		case errors.Is(err, neterror.ErrUpstreamStreamIdleTimeout):
-			errorCode = "upstream_stream_idle_timeout"
-		case errors.Is(err, neterror.ErrUpstreamResponseEmpty):
-			errorCode = "upstream_response_empty"
-		case errors.Is(err, errUpstreamStreamRead):
-			errorCode = "upstream_stream_interrupted"
-		default:
-			errorCode = "stream_interrupted"
-		}
+		errorCode = classifyCopyError(c.Request.Context(), err)
+	}
+}
+
+func anthropicUpstreamHTTPErrorType(status int) string {
+	switch status {
+	case http.StatusBadRequest, http.StatusConflict, http.StatusUnprocessableEntity:
+		return "invalid_request_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return "timeout_error"
+	default:
+		return "api_error"
+	}
+}
+
+func isEventStreamContentType(value string) bool {
+	mediaType, _, err := mime.ParseMediaType(value)
+	return err == nil && strings.EqualFold(mediaType, "text/event-stream")
+}
+
+func classifyCopyError(ctx context.Context, err error) string {
+	if err == nil {
+		return ""
+	}
+	if neterror.IsClientRequestCancel(ctx, err) {
+		return "client_stream_interrupted"
+	}
+	switch {
+	case errors.Is(err, errResponseTransferLimit):
+		return "response_too_large"
+	case errors.Is(err, errUpstreamStreamFailed):
+		return "upstream_stream_error"
+	case errors.Is(err, errUpstreamStreamIncomplete):
+		return "upstream_stream_incomplete"
+	case errors.Is(err, neterror.ErrUpstreamStreamIdleTimeout):
+		return "upstream_stream_idle_timeout"
+	case errors.Is(err, neterror.ErrUpstreamResponseEmpty):
+		return "upstream_response_empty"
+	case errors.Is(err, neterror.ErrUpstreamOutputLoop):
+		return "upstream_output_loop"
+	case errors.Is(err, errUpstreamStreamRead):
+		return "upstream_stream_interrupted"
+	default:
+		return "stream_interrupted"
 	}
 }
 
@@ -1504,6 +1555,8 @@ func streamAbortTrailer(protocol streamProtocol, cause error, meta responseMetad
 	switch {
 	case errors.Is(cause, neterror.ErrUpstreamStreamIdleTimeout):
 		code, message = "upstream_stream_idle_timeout", "上游流式响应长时间无数据"
+	case errors.Is(cause, neterror.ErrUpstreamOutputLoop):
+		code, message = "upstream_output_loop", "上游输出陷入循环"
 	case errors.Is(cause, errUpstreamStreamIncomplete):
 		code, message = "upstream_stream_incomplete", "上游流式响应未完整结束"
 	}
@@ -1561,9 +1614,13 @@ func streamAbortTrailer(protocol streamProtocol, cause error, meta responseMetad
 		}
 		return []byte("event: response.failed\ndata: " + string(payload) + "\n\n")
 	case streamProtocolAnthropic:
+		anthropicMessage := message
+		if code == "upstream_output_loop" {
+			anthropicMessage = code + ": " + message
+		}
 		payload, err := json.Marshal(map[string]any{
 			"type":  "error",
-			"error": map[string]any{"type": "api_error", "message": message},
+			"error": map[string]any{"type": "api_error", "message": anthropicMessage},
 		})
 		if err != nil {
 			return nil

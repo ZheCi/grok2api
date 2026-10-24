@@ -413,3 +413,107 @@ func convertChatToolChoice(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	return mustJSON(map[string]any{"type": "function", "name": function.Name}), nil
 }
+
+func restoreReasoningForCalls(calls []any, cache *ReasoningCache, scope string) []any {
+	if cache == nil || strings.TrimSpace(scope) == "" {
+		return calls
+	}
+	// A cached reasoning item may be inserted before each call, so the final
+	// slice can be larger than calls. Use the input size as a safe initial
+	// capacity and let append grow it; len(calls)+1 is unnecessary and can
+	// overflow for a maximally sized input slice.
+	result := make([]any, 0, len(calls))
+	seenIDs := make(map[string]struct{})
+	seenEncrypted := make(map[string]struct{})
+	for _, raw := range calls {
+		callMap, ok := raw.(map[string]any)
+		if !ok {
+			result = append(result, raw)
+			continue
+		}
+		callID, _ := callMap["call_id"].(string)
+		if item, found := cache.GetScoped(scope, callID); found && item.ID != "" && item.Encrypted != "" && !reasoningAlreadyEmitted(seenIDs, seenEncrypted, item) {
+			result = append(result, reasoningInputItem(item))
+			markReasoningEmitted(seenIDs, seenEncrypted, item)
+		}
+		result = append(result, raw)
+	}
+	return result
+}
+
+func reasoningAlreadyEmitted(ids, encrypted map[string]struct{}, item responseItem) bool {
+	if id := strings.TrimSpace(item.ID); id != "" {
+		if _, exists := ids[id]; exists {
+			return true
+		}
+	}
+	if value := strings.TrimSpace(item.Encrypted); value != "" {
+		if _, exists := encrypted[value]; exists {
+			return true
+		}
+	}
+	return false
+}
+
+func markReasoningEmitted(ids, encrypted map[string]struct{}, item responseItem) {
+	if id := strings.TrimSpace(item.ID); id != "" {
+		ids[id] = struct{}{}
+	}
+	if value := strings.TrimSpace(item.Encrypted); value != "" {
+		encrypted[value] = struct{}{}
+	}
+}
+
+func reasoningInputItem(item responseItem) map[string]any {
+	payload := map[string]any{
+		"type":   "reasoning",
+		"id":     item.ID,
+		"status": "completed",
+	}
+	if item.Encrypted != "" {
+		payload["encrypted_content"] = item.Encrypted
+	}
+	if summary := cleanReasoningContents(item.Summary); len(summary) > 0 {
+		payload["summary"] = summary
+	} else if item.Encrypted != "" {
+		// Build's replay schema requires a summary member when an opaque proof is
+		// present. An empty array is the canonical representation for a redacted
+		// or summary-less reasoning item.
+		payload["summary"] = []any{}
+	}
+	// Omit content when it is nil/empty. Build treats content:null as a
+	// mutation of the opaque reasoning/compaction payload.
+	if content := cleanReasoningContents(item.Content); len(content) > 0 {
+		payload["content"] = content
+	}
+	return payload
+}
+
+// cleanReasoningContents converts the internal response representation back to
+// the small Responses input shape. responseContent's struct tags intentionally
+// do not use omitempty because they are also used for decoding upstream output;
+// assigning the structs directly here would therefore emit refusal:"" and
+// annotations:null and make an opaque reasoning item look rewritten.
+func cleanReasoningContents(contents []responseContent) []any {
+	if len(contents) == 0 {
+		return nil
+	}
+	cleaned := make([]any, 0, len(contents))
+	for _, content := range contents {
+		value := make(map[string]any, 4)
+		if content.Type != "" {
+			value["type"] = content.Type
+		}
+		if content.Text != "" || content.Type == "summary_text" || content.Type == "reasoning_text" || content.Type == "output_text" {
+			value["text"] = content.Text
+		}
+		if content.Refusal != "" {
+			value["refusal"] = content.Refusal
+		}
+		if content.Annotations != nil {
+			value["annotations"] = content.Annotations
+		}
+		cleaned = append(cleaned, value)
+	}
+	return cleaned
+}

@@ -313,6 +313,31 @@ func (s *Service) markReauthRequired(ctx context.Context, requestID string, cred
 	return true
 }
 
+// consoleNoCreditsReason is recorded on Console accounts the upstream reports
+// as never provisioned. Retrying, cooling down or rotating egress cannot help.
+const consoleNoCreditsReason = accountdomain.LastErrorConsoleUnlinked
+
+func isConsoleNoCreditsFailure(upstreamProvider accountdomain.Provider, failure *UpstreamFailure) bool {
+	return upstreamProvider == accountdomain.ProviderConsole && failure != nil && failure.NoCreditsOrLicenses
+}
+
+// retireConsoleNoCreditsAccount inspects a Console 403 and, when it is the
+// permanent no-credits denial, marks the account reauthRequired. The body is
+// restored on the response either way.
+func (s *Service) retireConsoleNoCreditsAccount(ctx context.Context, requestID string, credential accountdomain.Credential, response *provider.Response) bool {
+	if credential.Provider != accountdomain.ProviderConsole || response == nil || response.StatusCode != http.StatusForbidden {
+		return false
+	}
+	body, _ := readRetryableBody(response.Body)
+	response.Body = io.NopCloser(bytes.NewReader(body))
+	if !provider.IsConsoleNoCreditsText(string(body)) {
+		return false
+	}
+	s.markReauthRequired(ctx, requestID, credential, consoleNoCreditsReason)
+	s.logger.Warn("console_account_no_credits", "request_id", requestID, "account_id", credential.ID)
+	return true
+}
+
 func teamModelRateLimitKey(providerValue accountdomain.Provider, teamFingerprint, upstreamModel string) string {
 	return string(providerValue) + "\x00" + teamFingerprint + "\x00" + strings.TrimSpace(upstreamModel)
 }
@@ -1147,6 +1172,11 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 				}
 				record.CreatedAt = now
 				applyAuditEgress(&record, egressTrace, route.Provider)
+				if err := budget.run("quality_disable", finalizationHealthBudget, func(stageCtx context.Context) error {
+					return s.applyOutputSpeedPenalty(stageCtx, record, credential, holdCfg, input.ForcedEgressNodeID != 0)
+				}); err != nil {
+					s.logger.Error("quality_degraded_penalty_failed", "request_id", input.RequestID, "account_id", credential.ID, "error", err)
+				}
 				if supportsStoredResponses && operation == audit.OperationResponses && responseID != "" && successful {
 					err := budget.run("response_ownership", finalizationOwnershipBudget, func(stageCtx context.Context) error {
 						return s.responses.Save(stageCtx, inferencedomain.ResponseOwnership{ResponseID: responseID, AccountID: accountID, ClientKeyID: input.ClientKey.ID, ModelRouteID: route.ID, Provider: route.Provider, PromptCacheKey: ownershipPromptCacheKey, ReasoningReplayKey: reasoningReplayKey, ExpiresAt: now.Add(responseOwnershipTTL), CreatedAt: now, UpdatedAt: now})
@@ -1438,8 +1468,12 @@ attemptLoop:
 					s.logger.Warn("upstream_request_scoped_forbidden", "request_id", input.RequestID, "account_id", credential.ID, "provider", credential.Provider, "status", response.StatusCode, "upstream_code", lastFailure.UpstreamCode)
 				}
 				// Fall through to the common success/error response path so the client receives the original 403.
-			} else if lastFailure.AccountBlocked {
-				failureHandled := s.markReauthRequired(ctx, input.RequestID, credential, fmt.Sprintf("%s account is blocked", credential.Provider))
+			} else if lastFailure.AccountBlocked || isConsoleNoCreditsFailure(credential.Provider, lastFailure) {
+				reason := fmt.Sprintf("%s account is blocked", credential.Provider)
+				if !lastFailure.AccountBlocked {
+					reason = consoleNoCreditsReason
+				}
+				failureHandled := s.markReauthRequired(ctx, input.RequestID, credential, reason)
 				if lastFailure.AccountScoped && !failureHandled {
 					s.selector.MarkFailure(ctx, credential, response.StatusCode, retryAfter)
 				}
@@ -1660,7 +1694,7 @@ attemptLoop:
 							cooldown = qualityIdleAccountCooldown
 						}
 					}
-					s.applyMissingThinkingPenalty(ctx, input.RequestID, credential, cooldown)
+					s.applyMissingThinkingPenalty(ctx, input.RequestID, credential, cooldown, holdCfg.AutoDisable)
 				}
 				deferFailOpenAudit := commit.Action == QualityActionRetry && holdCfg.OnExhausted == qualityRetryFailOpen
 				if commit.Audit && !deferFailOpenAudit {
@@ -2172,8 +2206,18 @@ func isBuildTransientRetryError(err error) bool {
 		!errors.Is(err, errQualityEmptyStream)
 }
 
+func isReasoningRecoveryFailedResponse(response *provider.Response, upstreamProvider accountdomain.Provider) bool {
+	return upstreamProvider == accountdomain.ProviderBuild && response != nil && response.ReasoningRecoveryFailed
+}
+
 func isRetryableResponse(response *provider.Response, upstreamProvider accountdomain.Provider) bool {
-	if response == nil || !isRetryable(response.StatusCode) {
+	if response == nil {
+		return false
+	}
+	if response.StatusCode == http.StatusBadRequest && isReasoningRecoveryFailedResponse(response, upstreamProvider) {
+		return true
+	}
+	if !isRetryable(response.StatusCode) {
 		return false
 	}
 	// The official Build client treats Cloudflare origin-TLS failures as fatal,
@@ -2216,6 +2260,14 @@ func forcesAccountFailover(status int, upstreamProvider accountdomain.Provider) 
 func (s *Service) applyRateLimitReconciliation(ctx context.Context, credential accountdomain.Credential, status int, retryAfter time.Duration, state accountapp.RateLimitReconcileState, reconcileErr error) {
 	s.selector.MarkQuotaStateChanged(credential.Provider, credential.ID)
 	if reconcileErr == nil && state == accountapp.RateLimitReconcileExhausted {
+		return
+	}
+	if credential.Provider == accountdomain.ProviderConsole && status == http.StatusPaymentRequired {
+		// 402 spending-limit is authoritative even when the panel still shows
+		// budget. Pause until the next probe instead of growing the failure count.
+		if err := s.selector.MarkPaymentQuotaExhausted(ctx, credential, quotaRecoveryHints{}); err != nil {
+			s.logger.Warn("console_spending_limit_pause_failed", "account_id", credential.ID, "state", state, "error", err)
+		}
 		return
 	}
 	if credential.Provider == accountdomain.ProviderConsole && status == http.StatusTooManyRequests {

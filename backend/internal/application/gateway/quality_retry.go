@@ -76,6 +76,13 @@ type QualityRetryRuntime struct {
 	// ConsecutiveFailures arms a one-shot skip of that node's accounts on the
 	// next selection. Zero disables it. A real delivery resets the streak.
 	ConsecutiveFailures int
+	// AutoDisable turns the first confirmed missing-thinking or degraded
+	// throughput hit into an account disable. It does not change the withhold rules.
+	AutoDisable     bool
+	SoftTPS         float64
+	HardTPS         float64
+	MinGenerationMS int64
+	FailClosed      bool
 }
 
 // QualityStreamSignals is the hold classifier input. Tests drive this
@@ -580,10 +587,10 @@ func jsonStringEquals(raw json.RawMessage, want string) bool {
 	return json.Unmarshal(raw, &value) == nil && strings.EqualFold(strings.TrimSpace(value), want)
 }
 
-func (s *Service) applyMissingThinkingPenalty(ctx context.Context, requestID string, credential accountdomain.Credential, cooldown time.Duration) {
+func (s *Service) applyMissingThinkingPenalty(ctx context.Context, requestID string, credential accountdomain.Credential, cooldown time.Duration, autoDisable bool) {
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalizationTimeout)
 	defer cancel()
-	action, err := s.selector.markMissingThinking(writeCtx, credential, cooldown)
+	action, err := s.selector.markMissingThinking(writeCtx, credential, cooldown, autoDisable)
 	if err != nil {
 		s.logger.Error("quality_degraded_penalty_failed", "request_id", requestID, "account_id", credential.ID, "action", action, "error", err)
 		return
@@ -594,6 +601,24 @@ func (s *Service) applyMissingThinkingPenalty(ctx context.Context, requestID str
 	case missingThinkingPenaltyCooled:
 		s.logger.Info("quality_degraded_cooldown", "request_id", requestID, "account_id", credential.ID, "cooldown", cooldown.String())
 	}
+}
+
+func (s *Service) applyOutputSpeedPenalty(ctx context.Context, record audit.Record, credential accountdomain.Credential, cfg QualityRetryRuntime, forcedEgress bool) error {
+	if record.Operation == audit.OperationCompaction {
+		return nil
+	}
+	if !cfg.Enabled || !cfg.AutoDisable || forcedEgress || credential.Provider != accountdomain.ProviderBuild || !record.Streaming || record.FirstTokenMS == nil || record.OutputTokens < cfg.MinOutputTokens || !auditRequestSucceeded(record.StatusCode, record.ErrorCode) {
+		return nil
+	}
+	class, tps, _ := audit.ClassifyOutputSpeed(record.OutputTokens, record.ReasoningTokens, *record.FirstTokenMS, record.DurationMS, cfg.SoftTPS, cfg.HardTPS, cfg.MinGenerationMS, cfg.FailClosed)
+	if class == "" {
+		return nil
+	}
+	if err := s.selector.disableAccount(ctx, credential); err != nil {
+		return err
+	}
+	s.logger.Info("quality_degraded_disabled", "request_id", record.RequestID, "account_id", credential.ID, "class", class, "output_tps", tps)
+	return nil
 }
 
 func (s *Service) recordQualityDegraded(ctx context.Context, base audit.Record, credential accountdomain.Credential, usage Usage, startedAt time.Time, trace *infraegress.Trace, provider accountdomain.Provider) {

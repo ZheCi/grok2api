@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
@@ -543,14 +542,11 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	if job.ClientKeyID > 0 {
 		key, keyErr := s.clientKeys.Get(ctx, job.ClientKeyID)
 		if keyErr != nil {
-			if errors.Is(keyErr, clientkeyapp.ErrNotFound) {
-				s.failVideoJob(ctx, job, "client_key_unavailable", keyErr, 0, nil)
+			if parent.Err() != nil {
+				s.deferVideoJob(parent, job)
 				return
 			}
-			if s.logger != nil {
-				s.logger.Warn("video_job_client_key_lookup_failed", "job_id", job.ID, "client_key_id", job.ClientKeyID, "error", keyErr)
-			}
-			s.deferVideoJob(parent, job)
+			s.failVideoJob(ctx, job, "client_key_unavailable", keyErr, 0, nil)
 			return
 		}
 		accountScope = key.AccountScope()
