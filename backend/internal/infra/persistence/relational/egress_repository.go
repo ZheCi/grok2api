@@ -50,6 +50,12 @@ func (r *EgressRepository) ListEgressNodes(ctx context.Context, scope egress.Sco
 	return values, nil
 }
 
+func (r *EgressRepository) ListEgressNodeIdentities(ctx context.Context) ([]egress.NodeIdentity, error) {
+	var rows []egress.NodeIdentity
+	err := r.db.db.WithContext(ctx).Model(&egressNodeModel{}).Select("id", "name", "enabled").Order("id").Find(&rows).Error
+	return rows, err
+}
+
 func (r *EgressRepository) ListEgressNodePage(ctx context.Context, input repository.EgressNodeListQuery) ([]egress.Node, int64, error) {
 	query := r.db.db.WithContext(ctx).Model(&egressNodeModel{})
 	if search := strings.TrimSpace(input.Page.Search); search != "" {

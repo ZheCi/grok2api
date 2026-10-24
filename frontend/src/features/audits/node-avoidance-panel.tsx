@@ -34,13 +34,14 @@ function compareNodes(left: NodeAvoidanceItem, right: NodeAvoidanceItem, now: nu
   return left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
 }
 
-export function NodeAvoidancePanel() {
+export function NodeAvoidancePanel({ active }: { active: boolean }) {
   const { t } = useTranslation();
   const [now, setNow] = useState(() => Date.now());
   const query = useQuery({
     queryKey: ["egress-nodes", "avoidance"],
     queryFn: ({ signal }) => getNodeAvoidance(signal),
-    refetchInterval: 10_000,
+    enabled: active,
+    refetchInterval: active ? 10_000 : false,
     staleTime: 10_000,
   });
 

@@ -1046,11 +1046,14 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	normalizedMetadata := &provider.NormalizedRequestMetadata{}
 	responseStartedAt := startedAt
 	transientRetry := 0
+	transientRetryAccount := uint64(0)
 	forwardResponse := func(lease *accountLease, credential accountdomain.Credential, billing *accountdomain.Billing) (*provider.Response, error) {
 		started := time.Now()
 		responseStartedAt = started
 		lease.markSelectorUpstreamStarted()
-		response, err := adapter.ForwardResponse(physicalCallCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, TransientRetry: transientRetry, IdempotencyID: idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(operation), NormalizedMetadata: normalizedMetadata})
+		stopKeepalive := startStreamRequestKeepalive(physicalCallCtx)
+		response, err := adapter.ForwardResponse(physicalCallCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, TransientRetry: buildTransientRetryCount(credential, &transientRetryAccount, &transientRetry), IdempotencyID: idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(operation), NormalizedMetadata: normalizedMetadata})
+		stopKeepalive()
 		auditBase.ReasoningEffort = normalizedMetadata.ReasoningEffort
 		err = failureAttempts.captureResponse(credential, started, response, err)
 		timing.markUpstream(time.Since(started))
@@ -1246,15 +1249,9 @@ attemptLoop:
 				}
 			}
 		} else if ownership != nil && qualityAccountAttempts == 0 {
+			// The stored response exists only on this account. Node avoidance
+			// may steer a new conversation, but it must not move this turn.
 			lease, err = s.selector.AcquirePinnedForKey(ctx, route.Provider, ownership.AccountID, route.ID, route.UpstreamModel, quotaMode, true, accountScope)
-			if err == nil && lease != nil && s.selector.nodeQuality.blocks(time.Now().UTC(), lease.Credential.EgressNodeID) {
-				lease.Release()
-				lease = nil
-				selection, err = s.selector.beginSelectionSessionForKey(ctx, route.Provider, route.ID, route.UpstreamModel, quotaMode, affinityKey, excluded, !quotaProbeAttempted, accountScope)
-				if err == nil {
-					lease, err = selection.Acquire(ctx, excluded, !quotaProbeAttempted)
-				}
-			}
 		} else if input.ForcedEgressNodeID != 0 {
 			lease, err = s.selector.AcquireForKeyOnEgressNode(ctx, route.Provider, route.ID, route.UpstreamModel, quotaMode, affinityKey, excluded, !quotaProbeAttempted, accountScope, input.ForcedEgressNodeID)
 		} else {
@@ -1356,7 +1353,7 @@ attemptLoop:
 				break
 			}
 			if isBuildTransientRetryError(err) {
-				transientRetry++
+				recordBuildTransientRetry(credential, transientRetryAccount, &transientRetry)
 			}
 			continue
 		}
@@ -1405,7 +1402,7 @@ attemptLoop:
 						break attemptLoop
 					}
 					if isBuildTransientRetryError(err) {
-						transientRetry++
+						recordBuildTransientRetry(credential, transientRetryAccount, &transientRetry)
 					}
 				}
 				continue
@@ -1527,7 +1524,7 @@ attemptLoop:
 						break attemptLoop
 					}
 					if isBuildTransientRetryError(err) {
-						transientRetry++
+						recordBuildTransientRetry(credential, transientRetryAccount, &transientRetry)
 					}
 					continue attemptLoop
 				}
@@ -1598,7 +1595,7 @@ attemptLoop:
 				break
 			}
 			if isBuildTransientRetryStatus(response.StatusCode) {
-				transientRetry++
+				recordBuildTransientRetry(credential, transientRetryAccount, &transientRetry)
 			}
 			continue
 		}
@@ -1636,7 +1633,7 @@ attemptLoop:
 						break
 					}
 					if isBuildTransientRetryError(peekErr) {
-						transientRetry++
+						recordBuildTransientRetry(credential, transientRetryAccount, &transientRetry)
 					}
 					continue
 				}
@@ -2142,6 +2139,31 @@ func isRetryable(status int) bool {
 // configuration failure and are deliberately excluded from transient traffic.
 func isBuildTransientRetryStatus(status int) bool {
 	return status >= http.StatusInternalServerError && status <= 599 && status != 525 && status != 526
+}
+
+// buildTransientRetryCount is the resubmit count for this Build account.
+// The header means the same account is sending the same turn again, so a
+// failover to another account starts back at zero. Non-Build calls never
+// carry the header.
+func buildTransientRetryCount(credential accountdomain.Credential, bound *uint64, count *int) int {
+	if credential.Provider != accountdomain.ProviderBuild || credential.ID == 0 || bound == nil || count == nil {
+		return 0
+	}
+	if credential.ID != *bound {
+		*count = 0
+		*bound = credential.ID
+	}
+	return *count
+}
+
+// recordBuildTransientRetry counts a transient failure only for the Build
+// account that just sent the turn. 525/526 never reach this helper: the
+// status path uses isBuildTransientRetryStatus, which excludes them.
+func recordBuildTransientRetry(credential accountdomain.Credential, bound uint64, count *int) {
+	if credential.Provider != accountdomain.ProviderBuild || credential.ID == 0 || credential.ID != bound || count == nil {
+		return
+	}
+	*count++
 }
 
 func isBuildTransientRetryError(err error) bool {

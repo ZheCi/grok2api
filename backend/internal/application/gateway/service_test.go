@@ -661,8 +661,8 @@ func TestGatewayNonStreamingEmptyIdleCoolsAccountAndSwitches(t *testing.T) {
 	if len(adapter.attempts) != 2 || adapter.attempts[0] != credentials[0].ID || adapter.attempts[1] != credentials[1].ID {
 		t.Fatalf("attempts = %#v", adapter.attempts)
 	}
-	if got := adapter.transientRetries; len(got) != 2 || got[0] != 0 || got[1] != 1 {
-		t.Fatalf("idle timeout transient retries = %#v, want [0 1]", got)
+	if got := adapter.transientRetries; len(got) != 2 || got[0] != 0 || got[1] != 0 {
+		t.Fatalf("idle timeout transient retries = %#v, want [0 0]", got)
 	}
 	cooled, err := accountRepo.Get(ctx, credentials[0].ID)
 	if err != nil {
@@ -4019,6 +4019,84 @@ func TestGatewayPreviousResponseIDDoesNotCrossAccounts(t *testing.T) {
 	}
 	if attempts := adapter.Attempts(); len(attempts) != 1 || attempts[0] != credentials[0].ID {
 		t.Fatalf("previous_response_id must stay pinned to account A, attempts=%#v", attempts)
+	}
+}
+
+func TestGatewayPreviousResponseStaysPinnedWhenNodeAvoided(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "prev-response-avoid.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accountRepo := relational.NewAccountRepository(database)
+	blockedNode, openNode := createBuildNodes(t, ctx, database)
+	modelRepo := relational.NewModelRepository(database)
+	auditRepo := relational.NewAuditRepository(database)
+	responseRepo := relational.NewResponseRepository(database)
+	keyRepo := relational.NewClientKeyRepository(database)
+	credentials := make([]account.Credential, 0, 2)
+	for index, name := range []string{"avoid-pin-a", "avoid-pin-b"} {
+		nodeID := openNode
+		if index == 0 {
+			nodeID = blockedNode
+		}
+		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
+			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: name,
+			ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
+			Priority: 200 - index, MaxConcurrent: 1, EgressNodeID: nodeID,
+		})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		credentials = append(credentials, credential)
+	}
+	if err := modelRepo.UpsertDiscovered(ctx, account.ProviderBuild, []string{"grok-pin-avoid"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, credential := range credentials {
+		if err := modelRepo.ReplaceAccountCapabilities(ctx, credential.ID, []string{"grok-pin-avoid"}, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clientKey, err := keyRepo.Create(ctx, clientkey.Key{
+		Name: "avoid-pin-key", Prefix: "avpin", SecretHash: strings.Repeat("4", 64), EncryptedSecret: "encrypted",
+		Enabled: true, RPMLimit: 120, MaxConcurrent: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := responseRepo.Save(ctx, inferencedomain.ResponseOwnership{
+		ResponseID: "resp-avoid-pin", AccountID: credentials[0].ID, ClientKeyID: clientKey.ID,
+		Provider: account.ProviderBuild, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &scriptedBuildAdapter{responses: map[uint64][]scriptedBuildResponse{
+		credentials[0].ID: {{status: http.StatusOK, body: `{"id":"resp-avoid-next","output":[]}`}},
+		credentials[1].ID: {{status: http.StatusOK, body: `{"id":"resp-should-not-run"}`}},
+	}}
+	registry := provider.NewRegistry(adapter)
+	sticky := memory.NewStickyStore()
+	accountService := accountapp.NewService(accountRepo, auditRepo, memory.NewDeviceSessionStore(), sticky, registry, testCipher(t), nil)
+	selector := NewSelector(accountRepo, memory.NewConcurrencyLimiter(), sticky, registry, time.Hour, time.Second, time.Minute)
+	selector.SetNodeQualityLimits(1, 0, time.Minute, 5*time.Minute)
+	selector.NoteNodeQualityDegraded(credentials[0].EgressNodeID, now)
+	service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(nil, nil, nil, 60, 4, nil), registry, selector, responseRepo, 3)
+	_, err = service.CreateResponse(ctx, Input{
+		RequestID: "req-avoid-pin", ClientKey: clientKey, PublicModel: "grok-pin-avoid",
+		PreviousResponseID: "resp-avoid-pin",
+		Body:               []byte(`{"model":"grok-pin-avoid","previous_response_id":"resp-avoid-pin","input":"hello"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts := adapter.Attempts(); len(attempts) != 1 || attempts[0] != credentials[0].ID {
+		t.Fatalf("avoided node must not unpin previous_response_id, attempts=%#v", attempts)
 	}
 }
 

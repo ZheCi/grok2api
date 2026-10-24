@@ -946,7 +946,7 @@ func (h *Handler) listNodeAvoidance(c *gin.Context) {
 		response.Success(c, http.StatusOK, gin.H{"items": []nodeAvoidanceItem{}})
 		return
 	}
-	nodes, err := h.service.ListAll(c.Request.Context(), "", repository.SortQuery{})
+	nodes, err := h.service.ListNodeIdentities(c.Request.Context())
 	if h.writeListError(c, err) {
 		return
 	}

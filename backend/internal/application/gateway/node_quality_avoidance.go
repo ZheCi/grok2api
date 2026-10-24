@@ -76,6 +76,11 @@ func (a *nodeQualityAvoidance) setPolicy(window, streak int, failureWindow, avoi
 	a.streakLimit = streak
 	a.failureWindow = failureWindow
 	a.avoidDuration = avoidDuration
+	// Both limits at zero turn avoidance off. Dropping the counters is not
+	// enough: acquire still filters nodes whose avoidUntil or skipOnce is set.
+	if window == 0 && streak == 0 {
+		a.nodes = nil
+	}
 	a.mu.Unlock()
 }
 
@@ -279,9 +284,6 @@ func (s *Selector) NoteNodeQualityDegraded(nodeID uint64, now time.Time) {
 		return
 	}
 	armedAvoid, armedSkip := s.nodeQuality.noteDegraded(nodeID, now)
-	if armedAvoid {
-		s.suppressNodeAccounts(nodeID, s.nodeQuality.inspect(nodeID).avoidUntil)
-	}
 	if !armedAvoid && !armedSkip {
 		return
 	}

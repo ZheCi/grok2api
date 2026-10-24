@@ -3,6 +3,7 @@ package inference
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -320,7 +321,7 @@ func (h *Handler) createChatCompletion(c *gin.Context) {
 	}
 	requestID, _ := c.Get(middleware.RequestIDKey)
 	requestIDValue, _ := requestID.(string)
-	result, err := h.gateway.CreateChatCompletion(c.Request.Context(), gateway.Input{
+	result, err := h.gateway.CreateChatCompletion(withStreamingHoldKeepalive(c, request.Stream), gateway.Input{
 		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
 		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
 		PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, body),
@@ -365,7 +366,7 @@ func (h *Handler) createMessage(c *gin.Context) {
 	}
 	requestID, _ := c.Get(middleware.RequestIDKey)
 	requestIDValue, _ := requestID.(string)
-	result, err := h.gateway.CreateMessage(c.Request.Context(), gateway.Input{
+	result, err := h.gateway.CreateMessage(withStreamingHoldKeepalive(c, request.Stream), gateway.Input{
 		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
 		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
 		PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, body),
@@ -526,6 +527,32 @@ func setSafeMediaResponseHeaders(c *gin.Context, upstream http.Header) {
 		if value := strings.TrimSpace(upstream.Get(name)); value != "" {
 			c.Header(name, value)
 		}
+	}
+}
+
+func withStreamingHoldKeepalive(c *gin.Context, stream bool) context.Context {
+	if !stream {
+		return c.Request.Context()
+	}
+	return gateway.WithStreamKeepalive(c.Request.Context(), newStreamingHoldKeepalive(c))
+}
+
+func newStreamingHoldKeepalive(c *gin.Context) func() {
+	return func() {
+		if !c.Writer.Written() {
+			header := c.Writer.Header()
+			header.Set("Content-Type", "text/event-stream; charset=utf-8")
+			header.Set("Cache-Control", "no-cache")
+			header.Set("X-Accel-Buffering", "no")
+			c.Status(http.StatusOK)
+		}
+		if err := setResponseWriteDeadline(c.Writer); err != nil {
+			return
+		}
+		if _, err := c.Writer.Write([]byte(": ping\n\n")); err != nil {
+			return
+		}
+		c.Writer.Flush()
 	}
 }
 
@@ -1164,10 +1191,11 @@ func (h *Handler) handleCreate(c *gin.Context, compact bool) {
 		Headers:                   c.Request.Header.Clone(),
 	}
 	var result *gateway.Result
+	ctx := withStreamingHoldKeepalive(c, request.Stream && !compact)
 	if compact {
-		result, err = h.gateway.CompactResponse(c.Request.Context(), input)
+		result, err = h.gateway.CompactResponse(ctx, input)
 	} else {
-		result, err = h.gateway.CreateResponse(c.Request.Context(), input)
+		result, err = h.gateway.CreateResponse(ctx, input)
 	}
 	if err != nil {
 		writeGatewayError(c, err)
@@ -1290,10 +1318,22 @@ func (h *Handler) writeProtocolResult(c *gin.Context, result *gateway.Result, st
 		writeOpenAIError(c, http.StatusBadGateway, "response_too_large", "上游响应超过代理安全上限")
 		return
 	}
-	copyHeaders(c.Writer.Header(), result.Header)
-	c.Status(result.StatusCode)
-	if result.StatusCode >= 400 {
-		errorCode = "upstream_error"
+	if c.Writer.Written() {
+		if result.StatusCode >= 400 {
+			errorCode = "upstream_error"
+			if anthropic {
+				writeAnthropicError(c, result.StatusCode, "api_error", "上游请求失败", "upstream_error")
+			} else {
+				writeOpenAIError(c, result.StatusCode, "upstream_error", "上游请求失败")
+			}
+			return
+		}
+	} else {
+		copyHeaders(c.Writer.Header(), result.Header)
+		c.Status(result.StatusCode)
+		if result.StatusCode >= 400 {
+			errorCode = "upstream_error"
+		}
 	}
 	var err error
 	if stream {
@@ -2223,6 +2263,15 @@ func writeOpenAIError(c *gin.Context, status int, code, message string) {
 	case status >= 500:
 		errorType = "server_error"
 	}
+	if c.Writer.Written() {
+		payload, err := json.Marshal(gin.H{"error": gin.H{"message": message, "type": errorType, "code": code, "param": nil}})
+		if err != nil {
+			return
+		}
+		_, _ = c.Writer.Write([]byte("data: " + string(payload) + "\n\ndata: [DONE]\n\n"))
+		c.Writer.Flush()
+		return
+	}
 	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"message": message, "type": errorType, "code": code, "param": nil}})
 }
 
@@ -2382,6 +2431,15 @@ func writeAnthropicError(c *gin.Context, status int, errorType, message string, 
 	errorPayload := gin.H{"type": errorType, "message": message}
 	if len(errorCode) > 0 && errorCode[0] != "" && errorCode[0] != "upstream_unavailable" {
 		errorPayload["code"] = errorCode[0]
+	}
+	if c.Writer.Written() {
+		payload, err := json.Marshal(gin.H{"type": "error", "error": errorPayload})
+		if err != nil {
+			return
+		}
+		_, _ = c.Writer.Write([]byte("event: error\ndata: " + string(payload) + "\n\n"))
+		c.Writer.Flush()
+		return
 	}
 	c.AbortWithStatusJSON(status, gin.H{"type": "error", "error": errorPayload})
 }

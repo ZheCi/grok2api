@@ -106,7 +106,7 @@ export function RequestAuditTrend({
         </div>
         <div className="shrink-0 overflow-hidden transition-[width] duration-300 ease-out" style={{ width: avoidanceOpen ? panelWidth : 0 }}>
           <div style={{ width: panelWidth }}>
-            <NodeAvoidancePanel />
+            <NodeAvoidancePanel active={avoidanceOpen} />
           </div>
         </div>
       </div>

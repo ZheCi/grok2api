@@ -100,9 +100,16 @@ func mergeUpstreamProfile(slug string, existing UpstreamModelProfile, hasExistin
 			merged.SupportsReasoningEffort = false
 		}
 	case hasExisting && menuHasRealEffort(existing.ReasoningEfforts) && !menuCovers(existing.ReasoningEfforts, incoming.ReasoningEfforts):
-		merged.ReasoningEfforts = append([]string(nil), existing.ReasoningEfforts...)
+		merged.ReasoningEfforts = unionReasoningMenu(existing.ReasoningEfforts, incoming.ReasoningEfforts)
 		merged.DefaultReasoningEffort = existing.DefaultReasoningEffort
 		merged.SupportsReasoningEffort = true
+	}
+	if menuHasRealEffort(merged.ReasoningEfforts) && staticMenuHasRealEffort(slug) {
+		merged.ReasoningEfforts = unionReasoningMenu(merged.ReasoningEfforts, grokReasoningCapabilities[slug])
+		merged.SupportsReasoningEffort = true
+		if !menuContains(merged.ReasoningEfforts, merged.DefaultReasoningEffort) {
+			merged.DefaultReasoningEffort = ""
+		}
 	}
 	if hasExisting && existing.ContextWindow > merged.ContextWindow {
 		merged.ContextWindow = existing.ContextWindow
@@ -121,6 +128,33 @@ func menuHasRealEffort(efforts []string) bool {
 
 func staticMenuHasRealEffort(slug string) bool {
 	return menuHasRealEffort(grokReasoningCapabilities[slug])
+}
+
+func menuContains(efforts []string, effort string) bool {
+	if effort == "" {
+		return false
+	}
+	for _, value := range efforts {
+		if value == effort {
+			return true
+		}
+	}
+	return false
+}
+
+func unionReasoningMenu(base, extra []string) []string {
+	out := make([]string, 0, len(base)+len(extra))
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	for _, list := range [][]string{base, extra} {
+		for _, effort := range list {
+			if _, ok := seen[effort]; ok {
+				continue
+			}
+			seen[effort] = struct{}{}
+			out = append(out, effort)
+		}
+	}
+	return out
 }
 
 func menuCovers(existing, incoming []string) bool {

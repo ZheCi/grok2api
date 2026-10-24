@@ -439,6 +439,24 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 	return s.publicNodes(values), total, nil
 }
 
+func (s *Service) ListNodeIdentities(ctx context.Context) ([]domain.NodeIdentity, error) {
+	type identityLister interface {
+		ListEgressNodeIdentities(context.Context) ([]domain.NodeIdentity, error)
+	}
+	if lister, ok := s.repository.(identityLister); ok {
+		return lister.ListEgressNodeIdentities(ctx)
+	}
+	nodes, err := s.ListAll(ctx, "", repository.SortQuery{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.NodeIdentity, 0, len(nodes))
+	for _, node := range nodes {
+		out = append(out, domain.NodeIdentity{ID: node.ID, Name: node.Name, Enabled: node.Enabled})
+	}
+	return out, nil
+}
+
 func (s *Service) ListAll(ctx context.Context, scope domain.Scope, sort repository.SortQuery) ([]domain.PublicNode, error) {
 	if !validListScope(scope) {
 		return nil, ErrInvalidFilter

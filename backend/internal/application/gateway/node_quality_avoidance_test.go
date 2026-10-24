@@ -64,7 +64,7 @@ func TestNodeAvoidanceUntilKeepsOnlyTimedWindows(t *testing.T) {
 	if !got[7].Equal(now.Add(30 * time.Minute)) {
 		t.Fatalf("avoidUntil = %s", got[7])
 	}
-	if _, ok := timed.avoidUntil(now.Add(30*time.Minute))[7]; ok {
+	if _, ok := timed.avoidUntil(now.Add(30 * time.Minute))[7]; ok {
 		t.Fatal("expired avoidance must drop out of the listing")
 	}
 
@@ -332,9 +332,8 @@ func TestNodeQualityWindowKeepsLaterSessionsOffTheNode(t *testing.T) {
 		t.Fatalf("later session picked account %d on node %d, want %d", next.Credential.ID, next.Credential.EgressNodeID, open.ID)
 	}
 	next.Release()
-	override, ok := selector.healthOverrides[mid.ID]
-	if !ok || override.cooldownUntil == nil || !override.cooldownUntil.After(now) {
-		t.Fatal("window did not hold the other account on the avoided node")
+	if override, ok := selector.healthOverrides[mid.ID]; ok {
+		t.Fatalf("node avoidance must not write a health override: %+v", override)
 	}
 }
 
@@ -554,4 +553,34 @@ func runNodeQualityChat(t *testing.T, adapterFor func(high, low, other account.C
 		t.Fatalf("adapter type %T has no attempts", adapter)
 	}
 	return high, low, other, scripted.Attempts()
+}
+
+func TestNodeQualityZeroLimitsClearExistingAvoidance(t *testing.T) {
+	avoidance := &nodeQualityAvoidance{nodes: map[uint64]*nodeQualityState{}}
+	avoidance.setLimits(1, 0)
+	now := time.Date(2026, 10, 23, 3, 0, 0, 0, time.UTC)
+	avoidance.noteDegraded(7, now)
+	if !avoidance.blocks(now, 7) {
+		t.Fatal("one failure at the limit must avoid the node")
+	}
+	avoidance.setLimits(0, 0)
+	if avoidance.blocks(now.Add(time.Second), 7) {
+		t.Fatal("setting both limits to zero must clear an avoidance that is already armed")
+	}
+}
+
+func TestNodeAvoidanceDoesNotReplaceHealthOverride(t *testing.T) {
+	now := time.Now().UTC()
+	selector := &Selector{healthOverrides: map[uint64]routingHealthOverride{
+		9: {
+			provider: account.ProviderBuild, lastError: account.LastErrorMissingThinking,
+			revision: 4, updatedAt: now, expiresAt: now.Add(time.Hour),
+		},
+	}}
+	selector.SetNodeQualityLimits(1, 0, time.Minute, 5*time.Minute)
+	selector.NoteNodeQualityDegraded(7, now)
+	override := selector.healthOverrides[9]
+	if override.lastError != account.LastErrorMissingThinking || override.revision != 4 {
+		t.Fatalf("health override changed: %+v", override)
+	}
 }

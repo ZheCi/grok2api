@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1759,6 +1760,28 @@ func TestAttemptLoopQualityFailOpenFallbackAndTotalAttemptCap(t *testing.T) {
 			t.Fatal("the delivered fallback must not be audited as a discarded quality attempt")
 		}
 	}
+}
+
+func TestStartStreamRequestKeepaliveWritesImmediately(t *testing.T) {
+	var mu sync.Mutex
+	pings := 0
+	ctx := WithStreamKeepalive(context.Background(), func() {
+		mu.Lock()
+		pings++
+		mu.Unlock()
+	})
+	stop := startStreamRequestKeepalive(ctx)
+	stop()
+	mu.Lock()
+	defer mu.Unlock()
+	if pings != 1 {
+		t.Fatalf("pings = %d, want 1", pings)
+	}
+}
+
+func TestStartStreamRequestKeepaliveNoopWithoutCallback(t *testing.T) {
+	stop := startStreamRequestKeepalive(context.Background())
+	stop()
 }
 
 func TestNormalizeQualityRetryDefaults(t *testing.T) {

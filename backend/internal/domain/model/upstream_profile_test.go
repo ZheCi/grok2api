@@ -133,6 +133,24 @@ func TestNoneOnlyCatalogKeepsStaticMenu(t *testing.T) {
 	}
 }
 
+func TestPartialCatalogKeepsStaticEfforts(t *testing.T) {
+	ResetUpstreamProfiles()
+	t.Cleanup(ResetUpstreamProfiles)
+	RegisterUpstreamModelProfile("grok-4.6", UpstreamModelProfile{
+		ReasoningEfforts: []string{"low", "medium", "high"},
+	})
+	want := []string{ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh}
+	if got := SupportedReasoningEfforts("grok-4.6"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("partial catalog dropped static efforts: %v", got)
+	}
+	RegisterUpstreamModelProfile("grok-4.6", UpstreamModelProfile{
+		ReasoningEfforts: []string{"high", "xhigh"},
+	})
+	if got := SupportedReasoningEfforts("grok-4.6"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("later partial catalog dropped efforts: %v", got)
+	}
+}
+
 func TestGrok47StaticCapabilities(t *testing.T) {
 	ResetUpstreamProfiles()
 	want := []string{ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh}

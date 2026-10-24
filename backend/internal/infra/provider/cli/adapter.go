@@ -382,6 +382,9 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 					fallbackResp, fallbackURL, fallbackRecovery = a.recoverReasoningDecodeFailure(ctx, request, accessToken, fallbackBody, fallbackBase, fallbackReplayKey, fallbackResp, fallbackURL)
 				}
 				if fallbackErr == nil && isHTTPSuccess(fallbackResp.StatusCode) {
+					if fallbackConversation.ReasoningEffortSet && request.NormalizedMetadata != nil {
+						request.NormalizedMetadata.ReasoningEffort = fallbackConversation.ReasoningEffort
+					}
 					recoveredPrimaryFailure = bufferedFailureDiagnostic(primaryResp, primaryBody, primaryTruncated)
 					a.activateBuildAPIFallback(ctx, &request.Credential)
 					resp, reqURL, base, body, replayKey = fallbackResp, fallbackURL, fallbackBase, fallbackBody, fallbackReplayKey
@@ -544,10 +547,13 @@ func (a *Adapter) conversationFallbackBody(request provider.ResponseResourceRequ
 	if err != nil {
 		return nil, conversation.ResponseOptions{}, err
 	}
+	metadata := request.NormalizedMetadata
 	if options.ReasoningEffortSet && request.NormalizedMetadata != nil {
-		request.NormalizedMetadata.ReasoningEffort = options.ReasoningEffort
+		copied := *request.NormalizedMetadata
+		copied.ReasoningEffort = options.ReasoningEffort
+		metadata = &copied
 	}
-	body, err = normalizeBuildRequestWithMetadata(body, request.Model, request.Operation, request.NormalizedMetadata)
+	body, err = normalizeBuildRequestWithMetadata(body, request.Model, request.Operation, metadata)
 	if err != nil {
 		return nil, conversation.ResponseOptions{}, err
 	}

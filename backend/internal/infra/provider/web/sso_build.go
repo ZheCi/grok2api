@@ -334,14 +334,32 @@ func (f *ssoBuildFlow) captureCookies(response *http.Response) {
 	}
 }
 
-var consentTokenPattern = regexp.MustCompile(`name="consent_token"\s+value="([^"]+)"`)
+var (
+	consentInputPattern = regexp.MustCompile(`(?i)<input\b[^>]*>`)
+	consentAttrPattern  = regexp.MustCompile(`(?i)([^\s=/>]+)\s*=\s*("([^"]*)"|'([^']*)')`)
+)
 
 func scrapeConsentToken(body []byte) string {
-	match := consentTokenPattern.FindSubmatch(body)
-	if len(match) < 2 {
-		return ""
+	for _, tag := range consentInputPattern.FindAll(body, -1) {
+		var name, value string
+		for _, match := range consentAttrPattern.FindAllSubmatch(tag, -1) {
+			attr := strings.ToLower(string(match[1]))
+			attrValue := string(match[3])
+			if len(match[4]) > 0 && match[2][0] == '\'' {
+				attrValue = string(match[4])
+			}
+			switch attr {
+			case "name":
+				name = attrValue
+			case "value":
+				value = attrValue
+			}
+		}
+		if name == "consent_token" && value != "" {
+			return value
+		}
 	}
-	return string(match[1])
+	return ""
 }
 
 func ssoDeviceRedirectState(raw string) string {

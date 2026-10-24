@@ -56,6 +56,14 @@ type Node struct {
 	UpdatedAt                   time.Time
 }
 
+// NodeIdentity is the small row the avoidance audit poll needs. It does not
+// load proxy credentials, clearance cookies, or assignment counts.
+type NodeIdentity struct {
+	ID      uint64
+	Name    string
+	Enabled bool
+}
+
 type PublicNode struct {
 	ID                   uint64
 	Name                 string

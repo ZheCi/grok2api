@@ -58,9 +58,9 @@ func IsKnownReasoningEffort(value string) bool {
 //   - grok-4.20-multi-agent: low/medium/high/xhigh (effort controls agent count)
 //
 // Unknown models default to none-only and never expand into effort aliases.
-// A Build catalog menu with a real effort takes precedence over this table.
-// An empty menu, a none-only menu, or a menu that drops an effort already
-// in use does not. See RegisterUpstreamModelProfile.
+// A Build catalog menu is unioned with this table, so a partial sync cannot
+// drop a static tier. An empty menu or a none-only menu leaves the table in
+// place. See RegisterUpstreamModelProfile.
 var grokReasoningCapabilities = map[string][]string{
 	"grok-4.5":                     {ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh},
 	"grok-4.6":                     {ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh},

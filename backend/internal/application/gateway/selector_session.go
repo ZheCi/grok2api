@@ -190,39 +190,54 @@ func (session *selectionSession) acquireQuotaProbe(ctx context.Context, excluded
 		}
 		session.probePlan = plan
 	}
+	var fallbackProbe *account.RoutingCandidate
 	for candidate, ok := session.probePlan.Next(); ok; candidate, ok = session.probePlan.Next() {
 		if session.candidateExcluded(excluded, candidate.Credential.ID) {
 			continue
 		}
 		if session.selector.nodeQuality.blocks(time.Now().UTC(), candidate.Credential.EgressNodeID) {
-			continue
-		}
-		lease, err := session.selector.claimAccountSlot(ctx, candidate.Credential)
-		if err != nil {
-			if errors.Is(err, errRoutingCredentialStale) {
-				session.markCandidateStale(candidate.Credential.ID)
-				continue
-			}
-			return nil, err
-		}
-		if lease == nil {
-			continue
-		}
-		now := time.Now().UTC()
-		claimed, err := session.selector.accounts.ClaimQuotaProbe(ctx, candidate.Credential.ID, now, now.Add(quotaProbeLease))
-		if err != nil || !claimed {
-			lease.Release()
-			if err != nil {
-				return nil, err
+			if fallbackProbe == nil {
+				held := candidate
+				fallbackProbe = &held
 			}
 			continue
 		}
-		lease.QuotaProbe = true
-		lease.QuotaProbeKind = candidate.QuotaRecovery.Kind
-		lease.Billing = candidate.Billing
-		return lease, nil
+		lease, err := session.claimQuotaProbeCandidate(ctx, candidate)
+		if err != nil || lease != nil {
+			return lease, err
+		}
+	}
+	if fallbackProbe != nil {
+		return session.claimQuotaProbeCandidate(ctx, *fallbackProbe)
 	}
 	return nil, nil
+}
+
+func (session *selectionSession) claimQuotaProbeCandidate(ctx context.Context, candidate account.RoutingCandidate) (*accountLease, error) {
+	lease, err := session.selector.claimAccountSlot(ctx, candidate.Credential)
+	if err != nil {
+		if errors.Is(err, errRoutingCredentialStale) {
+			session.markCandidateStale(candidate.Credential.ID)
+			return nil, nil
+		}
+		return nil, err
+	}
+	if lease == nil {
+		return nil, nil
+	}
+	now := time.Now().UTC()
+	claimed, err := session.selector.accounts.ClaimQuotaProbe(ctx, candidate.Credential.ID, now, now.Add(quotaProbeLease))
+	if err != nil || !claimed {
+		lease.Release()
+		if err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	lease.QuotaProbe = true
+	lease.QuotaProbeKind = candidate.QuotaRecovery.Kind
+	lease.Billing = candidate.Billing
+	return lease, nil
 }
 
 func (session *selectionSession) acquireNormal(ctx context.Context, excluded map[uint64]bool) (*accountLease, error) {
@@ -292,16 +307,13 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 			}
 			session.normalPlan = plan
 		}
-		var fallbackCandidate *account.RoutingCandidate
+		var fallbackCandidates []account.RoutingCandidate
 		for candidate, ok := session.normalPlan.Next(); ok; candidate, ok = session.normalPlan.Next() {
 			if session.candidateExcluded(excluded, candidate.Credential.ID) {
 				continue
 			}
 			if session.selector.nodeQuality.blocks(time.Now().UTC(), candidate.Credential.EgressNodeID) {
-				if fallbackCandidate == nil {
-					held := candidate
-					fallbackCandidate = &held
-				}
+				fallbackCandidates = append(fallbackCandidates, candidate)
 				continue
 			}
 			lease, err := session.selector.claimAccountSlot(ctx, candidate.Credential)
@@ -313,16 +325,23 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 				return nil, err
 			}
 			if lease != nil {
-				return session.completeNormalLease(ctx, lease, candidate, excluded, nodeQualitySnapshot{})
+				return session.completeNormalLease(ctx, lease, candidate, excluded, session.selector.nodeQuality.snapshot(time.Now().UTC()))
 			}
 		}
-		if fallbackCandidate != nil {
-			lease, err := session.selector.claimAccountSlot(ctx, fallbackCandidate.Credential)
+		for _, candidate := range fallbackCandidates {
+			if session.candidateExcluded(excluded, candidate.Credential.ID) {
+				continue
+			}
+			lease, err := session.selector.claimAccountSlot(ctx, candidate.Credential)
 			if err != nil {
+				if errors.Is(err, errRoutingCredentialStale) {
+					session.markCandidateStale(candidate.Credential.ID)
+					continue
+				}
 				return nil, err
 			}
 			if lease != nil {
-				return session.completeNormalLease(ctx, lease, *fallbackCandidate, excluded, nodeQualitySnapshot{})
+				return session.completeNormalLease(ctx, lease, candidate, excluded, session.selector.nodeQuality.snapshot(time.Now().UTC()))
 			}
 		}
 		if !session.hasUnexcludedNormal(excluded) {
@@ -354,7 +373,7 @@ func (session *selectionSession) completeNormalLease(ctx context.Context, lease 
 		}
 		if boundID != candidate.Credential.ID {
 			boundCandidate, eligible := routingCandidateByID(session.values, session.normalCandidates, boundID)
-			if eligible && !session.candidateExcluded(excluded, boundID) && snap.blocks(boundCandidate.Credential.EgressNodeID) {
+			if eligible && !session.candidateExcluded(excluded, boundID) && (snap.blocks(boundCandidate.Credential.EgressNodeID) || session.selector.nodeQuality.blocks(time.Now().UTC(), boundCandidate.Credential.EgressNodeID)) {
 				eligible = false
 			}
 			if eligible && !session.candidateExcluded(excluded, boundID) {

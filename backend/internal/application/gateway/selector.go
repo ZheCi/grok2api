@@ -541,48 +541,77 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 		}
 		return nil, &SelectionUnavailableError{Reason: reason, RetryAfter: retryDelay(now, earliestRetry)}
 	}
+	allNormalCandidates := append([]int(nil), normalCandidates...)
+	nodeSnap := s.nodeQuality.snapshot(time.Now().UTC())
+	nodeFallback := false
+	applyNodeQuality := forcedEgressNodeID == 0 && nodeSnap.active()
 	if len(probeCandidates) > 0 {
 		staleClaims := 0
 		capacityMisses := 0
+		var blockedProbe *account.RoutingCandidate
 		plan, err := s.planCandidateIndexes(ctx, values, probeCandidates, now, s.resolveTierOrder(provider, upstreamModel, quotaMode))
 		if err != nil {
 			return nil, err
 		}
-		for candidate, ok := plan.Next(); ok; candidate, ok = plan.Next() {
-			lease, err := s.claimAccountSlot(ctx, candidate.Credential)
-			if err != nil {
-				if errors.Is(err, errRoutingCredentialStale) {
+		considerProbe := func(candidate account.RoutingCandidate) (*accountLease, bool, error) {
+			lease, claimErr := s.claimAccountSlot(ctx, candidate.Credential)
+			if claimErr != nil {
+				if errors.Is(claimErr, errRoutingCredentialStale) {
 					staleClaims++
-					continue
+					return nil, false, nil
 				}
-				return nil, err
+				return nil, false, claimErr
 			}
 			if lease == nil {
 				capacityMisses++
-				continue
+				return nil, false, nil
 			}
-			claimed, err := s.accounts.ClaimQuotaProbe(ctx, candidate.Credential.ID, now, now.Add(quotaProbeLease))
-			if err != nil || !claimed {
+			claimed, claimErr := s.accounts.ClaimQuotaProbe(ctx, candidate.Credential.ID, now, now.Add(quotaProbeLease))
+			if claimErr != nil || !claimed {
 				lease.Release()
-				if err != nil {
-					return nil, err
+				if claimErr != nil {
+					return nil, false, claimErr
 				}
-				continue
+				return nil, false, nil
 			}
 			lease.QuotaProbe = true
 			lease.QuotaProbeKind = candidate.QuotaRecovery.Kind
 			lease.Billing = candidate.Billing
-			return lease, nil
+			return lease, true, nil
 		}
-		if len(normalCandidates) == 0 && staleClaims > 0 && capacityMisses == 0 {
+		for candidate, ok := plan.Next(); ok; candidate, ok = plan.Next() {
+			if applyNodeQuality && nodeSnap.blocks(candidate.Credential.EgressNodeID) {
+				if blockedProbe == nil {
+					held := candidate
+					blockedProbe = &held
+				}
+				continue
+			}
+			lease, done, claimErr := considerProbe(candidate)
+			if claimErr != nil {
+				return nil, claimErr
+			}
+			if done {
+				return lease, nil
+			}
+		}
+		// Every probe account sits on an avoided node and nothing else is schedulable.
+		// Release one, matching the normal-candidate fallback, instead of reporting no accounts.
+		if blockedProbe != nil && len(allNormalCandidates) == 0 {
+			lease, done, claimErr := considerProbe(*blockedProbe)
+			if claimErr != nil {
+				return nil, claimErr
+			}
+			if done {
+				return lease, nil
+			}
+		}
+		if len(allNormalCandidates) == 0 && staleClaims > 0 && capacityMisses == 0 {
 			return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts}
 		}
 	}
-	nodeSnap := s.nodeQuality.snapshot(time.Now().UTC())
-	nodeFallback := false
-	applyNodeQuality := forcedEgressNodeID == 0 && nodeSnap.active()
 	if applyNodeQuality {
-		normalCandidates, nodeFallback = filterCandidatesByNodeQuality(values, normalCandidates, nodeSnap)
+		normalCandidates, nodeFallback = filterCandidatesByNodeQuality(values, allNormalCandidates, nodeSnap)
 	}
 	var saturatedStickyID uint64
 	if stickyKey != "" {
@@ -673,6 +702,16 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 	_, _, _, capacityWait := s.routingConfig()
 	waitDeadline := time.Now().Add(capacityWait)
 	for {
+		if forcedEgressNodeID == 0 {
+			nodeSnap = s.nodeQuality.snapshot(time.Now().UTC())
+			applyNodeQuality = nodeSnap.active()
+			if applyNodeQuality {
+				normalCandidates, nodeFallback = filterCandidatesByNodeQuality(values, allNormalCandidates, nodeSnap)
+			} else {
+				normalCandidates = allNormalCandidates
+				nodeFallback = false
+			}
+		}
 		currentTime := time.Now().UTC()
 		staleClaims := 0
 		capacityMisses := 0
@@ -1582,74 +1621,6 @@ func (s *Selector) applyHealthInvalidation(event repository.InvalidationEvent) {
 	}
 	s.healthOverrides[event.AccountID] = value
 	s.healthMu.Unlock()
-}
-
-// suppressNodeAccounts keeps every cached account on nodeID out of selection
-// until the avoid window ends. The node snapshot is also checked at acquire
-// time; this cooldown is what the candidate builder already honors, so a
-// later request cannot keep walking other accounts on the same node.
-func (s *Selector) suppressNodeAccounts(nodeID uint64, until time.Time) {
-	if s == nil || nodeID == 0 || !until.After(time.Now()) {
-		return
-	}
-	type held struct {
-		provider account.Provider
-		id       uint64
-		failures int
-	}
-	seen := map[uint64]held{}
-	s.candidateMu.Lock()
-	for _, snapshot := range s.candidates {
-		for _, candidate := range snapshot.values {
-			if candidate.Credential.EgressNodeID != nodeID {
-				continue
-			}
-			seen[candidate.Credential.ID] = held{
-				provider: candidate.Credential.Provider,
-				id:       candidate.Credential.ID,
-				failures: candidate.Credential.FailureCount,
-			}
-		}
-	}
-	for _, snapshot := range s.routingBases {
-		for _, base := range snapshot.values {
-			if base.Credential.EgressNodeID != nodeID {
-				continue
-			}
-			if _, ok := seen[base.Credential.ID]; ok {
-				continue
-			}
-			seen[base.Credential.ID] = held{
-				provider: base.Credential.Provider,
-				id:       base.Credential.ID,
-				failures: base.Credential.FailureCount,
-			}
-		}
-	}
-	s.candidateMu.Unlock()
-	for _, item := range seen {
-		s.holdAccountForNodeAvoid(item.provider, item.id, item.failures, until)
-	}
-}
-
-func (s *Selector) holdAccountForNodeAvoid(provider account.Provider, accountID uint64, failureCount int, until time.Time) {
-	if provider == "" || accountID == 0 || !until.After(time.Now()) {
-		return
-	}
-	deadline := until.UTC()
-	s.healthMu.Lock()
-	defer s.healthMu.Unlock()
-	current, exists := s.healthOverrides[accountID]
-	if exists && current.provider == provider && current.cooldownUntil != nil && !current.cooldownUntil.Before(deadline) {
-		return
-	}
-	if exists && current.failureCount > failureCount {
-		failureCount = current.failureCount
-	}
-	s.healthOverrides[accountID] = routingHealthOverride{
-		provider: provider, failureCount: failureCount, cooldownUntil: &deadline,
-		lastError: "node_quality_avoid", updatedAt: time.Now().UTC(), expiresAt: deadline,
-	}
 }
 
 func (s *Selector) applyRoutingHealth(value account.Credential, now time.Time) account.Credential {

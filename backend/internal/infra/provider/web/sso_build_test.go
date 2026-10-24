@@ -165,4 +165,12 @@ func TestScrapeConsentToken(t *testing.T) {
 	if got := scrapeConsentToken([]byte(`<input name="other" value="x"/>`)); got != "" {
 		t.Fatalf("expected empty, got %q", got)
 	}
+	reordered := []byte(`<input name="consent_token" type="hidden" value="ct-123">`)
+	if got := scrapeConsentToken(reordered); got != "ct-123" {
+		t.Fatalf("reordered attributes = %q", got)
+	}
+	quoted := []byte(`<input value='tok-single' name='consent_token'>`)
+	if got := scrapeConsentToken(quoted); got != "tok-single" {
+		t.Fatalf("single quotes = %q", got)
+	}
 }
