@@ -159,7 +159,7 @@ qualityGuard:
   # 在 <2s 内整段刷出，扣住。cipher-only 达 floor 后不立刻放行，等可见
   # 文本流满 2s 或流结束。reasoning_tokens=0 的 128k drool 也扣。
   # 3s hold 会把 grok-4.6 流末尾的 encrypted thinking 误判成 missing-thinking；
-  # 30s 是校验上限，也是 lab 默认。
+  # 校验上限是 180s，lab 默认仍是 30s。
   requestRetry:
     enabled: true
     maxAttempts: 6

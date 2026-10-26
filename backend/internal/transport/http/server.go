@@ -149,6 +149,10 @@ func New(deps Dependencies) *gin.Engine {
 	adminProtected := adminRoot.Group("")
 	adminProtected.Use(middleware.AdminAuth(deps.AdminAuth))
 	authHandler.RegisterAuthenticated(adminProtected)
+	if deps.Gateway != nil && deps.Accounts != nil {
+		deps.Gateway.SetInventoryProbe(deps.QualityGuardProbe)
+		deps.Accounts.SetInventoryTester(deps.Gateway)
+	}
 	accounthttp.NewHandler(deps.Accounts, deps.AccountSync).Register(adminProtected)
 	modelhttp.NewHandler(deps.Models).Register(adminProtected)
 	clientkeyhttp.NewHandler(deps.ClientKeys).Register(adminProtected)

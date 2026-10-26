@@ -112,6 +112,15 @@ func newFirstTokenTimer(started time.Time) *firstTokenTimer {
 	return &firstTokenTimer{started: started}
 }
 
+func (t *firstTokenTimer) reset(started time.Time) {
+	if t == nil {
+		return
+	}
+	t.started = started
+	t.once = sync.Once{}
+	t.encoded.Store(0)
+}
+
 func (t *firstTokenTimer) mark() {
 	if t == nil {
 		return

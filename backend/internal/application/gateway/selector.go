@@ -355,6 +355,7 @@ type Selector struct {
 	segmentedConfig        segmentedSelectorConfig
 	segmentedState         segmentedSelectorState
 	nodeQuality            nodeQualityAvoidance
+	nodeAvoidance          nodeAvoidanceStore
 	configMu               sync.RWMutex
 	candidateMu            sync.Mutex
 	selectionMu            sync.RWMutex
@@ -391,7 +392,11 @@ func NewSelector(accounts repository.AccountRepository, concurrency repository.C
 	if len(capacityWait) > 0 && capacityWait[0] > 0 {
 		wait = capacityWait[0]
 	}
-	return &Selector{accounts: accounts, concurrency: concurrency, sticky: sticky, tierOrders: tierOrders, stickyTTL: stickyTTL, cooldownBase: cooldownBase, cooldownMax: cooldownMax, capacityWait: wait, leaseWake: make(chan struct{}), logger: slog.Default(), lastSelectedAt: make(map[uint64]time.Time), lastSuccessAt: make(map[uint64]time.Time), healthOverrides: make(map[uint64]routingHealthOverride), quotaConsumed: make(map[quotaConsumptionKey]int), staleFallbackLoggedAt: make(map[string]time.Time), candidates: make(map[candidateCacheKey]candidateSnapshot), routingBases: make(map[routingBaseCacheKey]routingBaseSnapshot), routingOverlays: make(map[routingOverlayCacheKey]routingOverlaySnapshot), routingAccountProvider: make(map[uint64]account.Provider), baseProviderVersion: make(map[account.Provider]uint64), overlayProviderVersion: make(map[account.Provider]uint64), concurrencySnapshots: resultcache.New[[32]byte, map[string]int](maxConcurrencySnapshots, concurrencySnapshotTTL), nodeQuality: nodeQualityAvoidance{nodes: make(map[uint64]*nodeQualityState)}}
+	selector := &Selector{accounts: accounts, concurrency: concurrency, sticky: sticky, tierOrders: tierOrders, stickyTTL: stickyTTL, cooldownBase: cooldownBase, cooldownMax: cooldownMax, capacityWait: wait, leaseWake: make(chan struct{}), logger: slog.Default(), lastSelectedAt: make(map[uint64]time.Time), lastSuccessAt: make(map[uint64]time.Time), healthOverrides: make(map[uint64]routingHealthOverride), quotaConsumed: make(map[quotaConsumptionKey]int), staleFallbackLoggedAt: make(map[string]time.Time), candidates: make(map[candidateCacheKey]candidateSnapshot), routingBases: make(map[routingBaseCacheKey]routingBaseSnapshot), routingOverlays: make(map[routingOverlayCacheKey]routingOverlaySnapshot), routingAccountProvider: make(map[uint64]account.Provider), baseProviderVersion: make(map[account.Provider]uint64), overlayProviderVersion: make(map[account.Provider]uint64), concurrencySnapshots: resultcache.New[[32]byte, map[string]int](maxConcurrencySnapshots, concurrencySnapshotTTL), nodeQuality: nodeQualityAvoidance{nodes: make(map[uint64]*nodeQualityState)}}
+	if store, ok := accounts.(nodeAvoidanceStore); ok {
+		selector.nodeAvoidance = store
+	}
+	return selector
 }
 
 // SetLogger wires the application logger into routing degradation diagnostics.
@@ -923,12 +928,29 @@ func (s *Selector) acquirePinned(ctx context.Context, provider account.Provider,
 	if err != nil {
 		return nil, err
 	}
+	if probeID := inventoryProbeID(ctx); probeID == accountID && !routingCandidatesContain(values, accountID) {
+		if cred, getErr := s.accounts.Get(ctx, accountID); getErr == nil && cred.Provider == provider {
+			values = append(append([]account.RoutingCandidate{}, values...), account.RoutingCandidate{Credential: cred})
+		}
+	}
 	quotaConsumed := s.quotaConsumptionSnapshot(provider)
 	healthOverrides := s.routingHealthSnapshot(provider, now)
 	for _, candidate := range values {
 		value := applyHealthSnapshot(candidate.Credential, healthOverrides)
 		if value.ID != accountID {
 			continue
+		}
+		if inventoryProbeID(ctx) == accountID {
+			lease, err = s.acquirePinnedCapacity(ctx, value, nil)
+			if err != nil {
+				if errors.Is(err, errRoutingCredentialStale) {
+					return nil, pinnedUnavailableError(accountID, value.Name)
+				}
+				return nil, err
+			}
+			lease.Billing = candidate.Billing
+			lease.QuotaMode = effectiveQuotaMode(candidate, quotaMode)
+			return lease, nil
 		}
 		if !accountScopeAllowsCandidate(provider, accountScope, candidate) {
 			if accountScope.IsRestricted() {
@@ -1003,6 +1025,26 @@ func (s *Selector) acquirePinned(ctx context.Context, provider account.Provider,
 		return lease, nil
 	}
 	return nil, pinnedUnavailableError(accountID, "")
+}
+
+func routingCandidatesContain(values []account.RoutingCandidate, accountID uint64) bool {
+	for _, value := range values {
+		if value.Credential.ID == accountID {
+			return true
+		}
+	}
+	return false
+}
+
+type inventoryProbeContextKey struct{}
+
+func withInventoryProbe(ctx context.Context, accountID uint64) context.Context {
+	return context.WithValue(ctx, inventoryProbeContextKey{}, accountID)
+}
+
+func inventoryProbeID(ctx context.Context) uint64 {
+	id, _ := ctx.Value(inventoryProbeContextKey{}).(uint64)
+	return id
 }
 
 func pinnedUnavailableError(accountID uint64, name string) *SelectionUnavailableError {

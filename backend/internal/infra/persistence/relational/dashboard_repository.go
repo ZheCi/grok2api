@@ -57,7 +57,7 @@ func (r *DashboardRepository) Snapshot(ctx context.Context, window repository.Da
 			ConsoleAccounts int64
 		}
 		if err := tx.Model(&accountModel{}).
-			Select("COUNT(*) AS total, COALESCE(SUM(CASE WHEN enabled = ? AND auth_status = ? AND (cooldown_until IS NULL OR cooldown_until <= ?) AND NOT EXISTS (SELECT 1 FROM account_quota_recovery WHERE account_quota_recovery.account_id = provider_accounts.id AND account_quota_recovery.status IN ?) THEN 1 ELSE 0 END), 0) AS active, COALESCE(SUM(CASE WHEN provider = 'grok_build' THEN 1 ELSE 0 END), 0) AS build_accounts, COALESCE(SUM(CASE WHEN provider = 'grok_web' THEN 1 ELSE 0 END), 0) AS web_accounts, COALESCE(SUM(CASE WHEN provider = 'grok_console' THEN 1 ELSE 0 END), 0) AS console_accounts", true, "active", snapshotAt, []string{"exhausted", "probing"}).
+			Select("COUNT(*) AS total, COALESCE(SUM(CASE WHEN enabled = ? AND auth_status = ? AND inventory_group_id IS NULL AND (cooldown_until IS NULL OR cooldown_until <= ?) AND NOT EXISTS (SELECT 1 FROM account_quota_recovery WHERE account_quota_recovery.account_id = provider_accounts.id AND account_quota_recovery.status IN ?) THEN 1 ELSE 0 END), 0) AS active, COALESCE(SUM(CASE WHEN provider = 'grok_build' THEN 1 ELSE 0 END), 0) AS build_accounts, COALESCE(SUM(CASE WHEN provider = 'grok_web' THEN 1 ELSE 0 END), 0) AS web_accounts, COALESCE(SUM(CASE WHEN provider = 'grok_console' THEN 1 ELSE 0 END), 0) AS console_accounts", true, "active", snapshotAt, []string{"exhausted", "probing"}).
 			Scan(&accounts).Error; err != nil {
 			return err
 		}

@@ -614,8 +614,31 @@ func (r *AuditRepository) ListByAccountSince(ctx context.Context, input reposito
 }
 
 func (r *AuditRepository) ListRecentSince(ctx context.Context, input repository.AuditHistoryQuery) ([]audit.Record, error) {
+	if input.RequestLimit > 0 {
+		return r.listRecentSinceByRequest(ctx, input)
+	}
 	query := applyAuditQuery(r.db.db.WithContext(ctx).Model(&requestAuditModel{}), input.Search, input.Start, input.End, input.Filter)
 	return scanAuditHistory(query, input.Limit)
+}
+
+func (r *AuditRepository) listRecentSinceByRequest(ctx context.Context, input repository.AuditHistoryQuery) ([]audit.Record, error) {
+	limit := input.RequestLimit
+	if limit <= 0 || limit > auditHistoryAbsoluteCap {
+		limit = auditHistoryAbsoluteCap
+	}
+	base := func() *gorm.DB {
+		return applyAuditQuery(r.db.db.WithContext(ctx).Model(&requestAuditModel{}), input.Search, input.Start, input.End, input.Filter)
+	}
+	ids := base().Select("request_id").Group("request_id").Order("MAX(created_at) DESC, MAX(id) DESC").Limit(limit)
+	var rows []requestAuditModel
+	if err := base().Where("request_id IN (?)", ids).Omit("request_headers_json").Order("created_at DESC, id DESC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]audit.Record, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, toAuditDomain(row))
+	}
+	return out, nil
 }
 
 func scanAuditHistory(query *gorm.DB, limit int) ([]audit.Record, error) {

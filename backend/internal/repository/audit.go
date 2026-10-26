@@ -43,6 +43,9 @@ type AuditHistoryQuery struct {
 	Limit  int
 	Search string
 	Filter AuditListFilter
+	// RequestLimit returns every matching row of the newest N request ids.
+	// Zero keeps Limit as a row cap.
+	RequestLimit int
 }
 
 type DegradeSummaryQuery struct {

@@ -96,7 +96,8 @@ func toAccountDomain(value accountModel) account.Credential {
 		BuildAPIFallback: value.BuildAPIFallback, BuildRouteMode: buildRouteMode,
 		BuildSuperEntitled: value.BuildSuperEntitled && account.Provider(value.Provider) == account.ProviderBuild,
 		BuildBotFlagSource: normalizedBuildBotFlagSource(account.Provider(value.Provider), value.Credential),
-		CreatedAt:          value.CreatedAt, UpdatedAt: value.UpdatedAt,
+		InventoryGroupID:   valueInventoryGroupID(value.InventoryGroupID), StockedAt: value.StockedAt, QualityVerdict: value.QualityVerdict,
+		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
 	}
 }
 
@@ -133,8 +134,24 @@ func fromAccountDomain(value account.Credential) accountModel {
 		ObservedModel: value.ObservedModel, ObservedModelAt: value.ObservedModelAt,
 		BuildAPIFallback: buildAPIFallback, BuildRouteMode: string(buildRouteMode), BuildSuperEntitled: buildSuperEntitled,
 		EgressNodeID: egressNodeID(value.EgressNodeID), EgressAssignmentMode: string(value.EgressAssignmentMode), EgressAssignedAt: value.EgressAssignedAt,
+		InventoryGroupID: inventoryGroupID(value.InventoryGroupID), StockedAt: value.StockedAt, QualityVerdict: value.QualityVerdict,
 		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
 	}
+}
+
+func valueInventoryGroupID(value *uint64) uint64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func inventoryGroupID(value uint64) *uint64 {
+	if value == 0 {
+		return nil
+	}
+	result := value
+	return &result
 }
 
 func valueEgressNodeID(value *uint64) uint64 {

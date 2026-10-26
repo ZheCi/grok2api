@@ -12,6 +12,13 @@ type adminModel struct {
 
 func (adminModel) TableName() string { return "admins" }
 
+type nodeQualityAvoidanceModel struct {
+	NodeID     uint64    `gorm:"primaryKey;autoIncrement:false"`
+	AvoidUntil time.Time `gorm:"not null;index"`
+}
+
+func (nodeQualityAvoidanceModel) TableName() string { return "node_quality_avoidance" }
+
 type adminSessionModel struct {
 	ID               uint64    `gorm:"primaryKey;autoIncrement"`
 	AdminID          uint64    `gorm:"not null"`
@@ -57,14 +64,27 @@ type accountModel struct {
 	EgressNodeID         *uint64 `gorm:"index:idx_accounts_egress_node"`
 	EgressAssignmentMode string  `gorm:"size:16;not null;default:'';check:chk_accounts_egress_assignment_mode,egress_assignment_mode IN ('','manual','auto')"`
 	EgressAssignedAt     *time.Time
-	CreatedAt            time.Time               `gorm:"not null"`
-	UpdatedAt            time.Time               `gorm:"not null"`
-	Credential           *accountCredentialModel `gorm:"foreignKey:AccountID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
-	WebProfile           *webAccountProfileModel `gorm:"foreignKey:AccountID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
-	EgressNode           *egressNodeModel        `gorm:"foreignKey:EgressNodeID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL"`
+	// InventoryGroupID 非空表示账号在库存中，不参与调度。
+	InventoryGroupID *uint64 `gorm:"index:idx_accounts_inventory_group"`
+	StockedAt        *time.Time
+	// QualityVerdict 是最近一次库存降智测试结论：空、ok、degraded。
+	QualityVerdict string                  `gorm:"size:16;not null;default:''"`
+	CreatedAt      time.Time               `gorm:"not null"`
+	UpdatedAt      time.Time               `gorm:"not null"`
+	Credential     *accountCredentialModel `gorm:"foreignKey:AccountID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
+	WebProfile     *webAccountProfileModel `gorm:"foreignKey:AccountID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
+	EgressNode     *egressNodeModel        `gorm:"foreignKey:EgressNodeID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL"`
 }
 
 func (accountModel) TableName() string { return "provider_accounts" }
+
+type inventoryGroupModel struct {
+	ID        uint64    `gorm:"primaryKey;autoIncrement"`
+	Name      string    `gorm:"size:80;not null;uniqueIndex;check:chk_inventory_groups_name,length(trim(name)) BETWEEN 1 AND 80"`
+	CreatedAt time.Time `gorm:"not null"`
+}
+
+func (inventoryGroupModel) TableName() string { return "inventory_groups" }
 
 type accountCredentialModel struct {
 	AccountID                       uint64 `gorm:"primaryKey"`

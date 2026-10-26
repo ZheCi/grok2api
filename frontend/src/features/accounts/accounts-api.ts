@@ -109,6 +109,9 @@ export type AccountDTO = {
   linkedProvider?: "grok_build" | "grok_web";
   linkedAccounts?: LinkedAccountDTO[];
   createdAt: string;
+  inventoryGroupId?: string;
+  stockedAt?: string;
+  qualityVerdict?: "" | "ok" | "degraded";
   billing?: BillingDTO;
   quota: QuotaDTO;
   quotaWindows?: Array<{ mode: string; remaining: number; total: number; usagePercent: number; breakdown?: Array<{ productCode: number; usagePercent: number }>; windowSeconds: number; resetAt?: string; syncedAt?: string; source: "default" | "estimated" | "upstream" }>;
@@ -196,7 +199,7 @@ const accountValidator = hasShape({
   failureCount: isNumber, cooldownUntil: isOptional(isString), lastError: isOptional(isString), lastUsedAt: isOptional(isString),
   enabledDoesNotClearCooldown: isOptional(isBoolean),
   linkedAccountId: isOptional(isString), linkedAccountName: isOptional(isString), linkedProvider: isOptional(isOneOf("grok_build", "grok_web")), linkedAccounts: isOptional(isArrayOf(linkedAccountValidator)),
-  createdAt: isString, billing: isOptional(billingValidator), quota: quotaValidator, quotaWindows: isOptional(isArrayOf(quotaWindowValidator)),
+  createdAt: isString, inventoryGroupId: isOptional(isString), stockedAt: isOptional(isString), qualityVerdict: isOptional(isOneOf("", "ok", "degraded")), billing: isOptional(billingValidator), quota: quotaValidator, quotaWindows: isOptional(isArrayOf(quotaWindowValidator)),
 });
 const decodeBilling = createValidatedDecoder<BillingDTO>("billing", billingValidator);
 const decodeAccount = createValidatedDecoder<AccountDTO>("account", accountValidator);
@@ -238,6 +241,8 @@ type ListAccountsInput = {
   failClosed?: boolean;
   // 为空时返回全部 provider 的账号，用于跨 provider 的通用名单（如请求审计筛选）。
   provider?: AccountProvider;
+  inventory?: "stocked";
+  groupId?: string;
   sortBy?: string;
   sortOrder?: SortOrder;
 };
@@ -267,6 +272,8 @@ export function listAccounts(input: ListAccountsInput): Promise<PaginatedDTO<Acc
     query.set("sortOrder", input.sortOrder);
   }
   if (input.provider) query.set("provider", input.provider);
+  if (input.inventory) query.set("inventory", input.inventory);
+  if (input.groupId) query.set("groupId", input.groupId);
   return apiRequest(`/api/admin/v1/accounts?${query}`, {}, decodeAccountPage);
 }
 
@@ -726,4 +733,38 @@ export function startDeviceAuthorization(): Promise<DeviceSessionDTO> {
 
 export function pollDeviceAuthorization(sessionId: string, signal: AbortSignal): Promise<DevicePollDTO> {
   return apiRequest(`/api/admin/v1/accounts/device/${sessionId}/poll`, { method: "POST", signal }, decodeDevicePoll);
+}
+
+export type InventoryGroupDTO = { id: string; name: string };
+
+const inventoryGroupValidator = hasShape({ id: isString, name: isString });
+
+export function listInventoryGroups(): Promise<{ items: InventoryGroupDTO[] }> {
+  return apiRequest("/api/admin/v1/inventory/groups", {}, createObjectDecoder("inventory groups", { items: isArrayOf(inventoryGroupValidator) }));
+}
+
+export function createInventoryGroup(name: string): Promise<InventoryGroupDTO> {
+  return apiRequest("/api/admin/v1/inventory/groups", { method: "POST", body: { name } }, createValidatedDecoder("inventory group", inventoryGroupValidator));
+}
+
+export function stockAccounts(input: { ids: string[]; groupId?: string; groupName?: string; includeLinked: boolean }): Promise<{ ok: boolean }> {
+  return apiRequest("/api/admin/v1/accounts/inventory", { method: "POST", body: input }, createObjectDecoder("stock accounts", { ok: isBoolean }));
+}
+
+export function unstockAccounts(input: { ids: string[]; includeLinked: boolean }): Promise<{ ok: boolean }> {
+  return apiRequest("/api/admin/v1/accounts/inventory/remove", { method: "POST", body: input }, createObjectDecoder("unstock accounts", { ok: isBoolean }));
+}
+
+export type InventoryQualityItemDTO = { accountId: string; name: string; state: string; detail?: string };
+export type InventoryQualityJobDTO = { running: boolean; total: number; done: number; items: InventoryQualityItemDTO[] };
+
+const inventoryQualityItemValidator = hasShape({ accountId: isString, name: isString, state: isString, detail: isOptional(isString) });
+const inventoryQualityJobValidator = hasShape({ running: isBoolean, total: isNumber, done: isNumber, items: isArrayOf(inventoryQualityItemValidator) });
+
+export function currentInventoryQualityTest(): Promise<{ job: InventoryQualityJobDTO }> {
+  return apiRequest("/api/admin/v1/inventory/quality-tests/current", {}, createObjectDecoder("inventory quality", { job: inventoryQualityJobValidator }));
+}
+
+export function startInventoryQualityTest(input: { ids: string[]; nodeIds: string[] }): Promise<{ started: boolean; job: InventoryQualityJobDTO }> {
+  return apiRequest("/api/admin/v1/inventory/quality-tests", { method: "POST", body: input }, createObjectDecoder("start inventory quality", { started: isBoolean, job: inventoryQualityJobValidator }));
 }

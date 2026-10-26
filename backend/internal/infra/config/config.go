@@ -816,8 +816,8 @@ func validateQualityGuardRequestRetry(value QualityGuardRequestRetryConfig) erro
 	if value.MaxAttempts != 0 && (value.MaxAttempts < 1 || value.MaxAttempts > 6) {
 		return errors.New("qualityGuard.requestRetry.maxAttempts 必须在 1 到 6 之间")
 	}
-	if d := value.HoldTimeout.Value(); d != 0 && (d < 200*time.Millisecond || d > 30*time.Second) {
-		return errors.New("qualityGuard.requestRetry.holdTimeout 必须在 200ms 到 30s 之间")
+	if d := value.HoldTimeout.Value(); d != 0 && (d < 200*time.Millisecond || d > 180*time.Second) {
+		return errors.New("qualityGuard.requestRetry.holdTimeout 必须在 200ms 到 180s 之间")
 	}
 	if value.MinOutputTokens != 0 && (value.MinOutputTokens < 8 || value.MinOutputTokens > 256) {
 		return errors.New("qualityGuard.requestRetry.minOutputTokens 必须在 8 到 256 之间")

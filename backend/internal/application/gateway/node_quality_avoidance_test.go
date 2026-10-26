@@ -19,6 +19,40 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/runtime/memory"
 )
 
+type memNodeAvoidance struct {
+	until map[uint64]time.Time
+}
+
+func (m *memNodeAvoidance) LoadNodeAvoidance(context.Context, time.Time) (map[uint64]time.Time, error) {
+	return m.until, nil
+}
+
+func (m *memNodeAvoidance) SaveNodeAvoidance(_ context.Context, nodeID uint64, until time.Time) error {
+	if m.until == nil {
+		m.until = map[uint64]time.Time{}
+	}
+	m.until[nodeID] = until
+	return nil
+}
+
+func TestNodeAvoidanceSurvivesReload(t *testing.T) {
+	now := time.Now().UTC()
+	store := &memNodeAvoidance{until: map[uint64]time.Time{7: now.Add(time.Minute)}}
+	selector := NewSelector(nil, nil, nil, nil, time.Hour, time.Second, time.Minute)
+	selector.nodeAvoidance = store
+	if err := selector.LoadNodeAvoidance(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !selector.nodeQuality.blocks(now, 7) {
+		t.Fatal("loaded avoid-until did not block the node")
+	}
+	selector.SetNodeQualityLimits(1, 0, time.Minute, time.Minute)
+	selector.NoteNodeQualityDegraded(9, now)
+	if store.until[9].IsZero() {
+		t.Fatal("arming avoidance did not save avoid-until")
+	}
+}
+
 func TestNodeQualityWindowAvoidsForFiveMinutes(t *testing.T) {
 	avoidance := &nodeQualityAvoidance{nodes: map[uint64]*nodeQualityState{}}
 	avoidance.setLimits(3, 0)

@@ -217,13 +217,14 @@ func (s *Service) RequestCallStatus(ctx context.Context, search, rawPeriod strin
 }
 
 func (s *Service) loadRequestCallStatus(ctx context.Context, search string, filter ListFilter, period Period, start, end time.Time, thresholds CallStatusThresholds) (RequestCallStatus, error) {
-	records, truncated, err := loadCallStatusHistory(s.audits.ListRecentSince(ctx, repository.AuditHistoryQuery{
-		Start: start, End: end, Search: search, Limit: callStatusHistoryLimit(),
+	records, err := s.audits.ListRecentSince(ctx, repository.AuditHistoryQuery{
+		Start: start, End: end, Search: search, RequestLimit: callStatusHistoryLimit(),
 		Filter: repository.AuditListFilter{Model: filter.Model, Status: filter.Status, Mode: filter.Mode, Key: filter.Key, Account: filter.Account},
-	}))
+	})
 	if err != nil {
 		return RequestCallStatus{}, err
 	}
+	records, truncated := keepNewestRequests(records, callStatusHistoryCap)
 	points, totals := classifyCallStatusRecords(records, thresholds)
 	return RequestCallStatus{
 		Period: period, Range: CallStatusRange{Start: start, End: end}, Thresholds: thresholds,
@@ -236,6 +237,34 @@ func callStatusHistoryLimit() int {
 		return 2
 	}
 	return callStatusHistoryCap + 1
+}
+
+// keepNewestRequests drops the oldest request when records, newest first,
+// cover more than cap distinct request ids. Every row of a kept request stays.
+func keepNewestRequests(records []auditdomain.Record, cap int) ([]auditdomain.Record, bool) {
+	if cap < 1 || len(records) == 0 {
+		return records, false
+	}
+	seen := make(map[string]struct{})
+	order := make([]string, 0)
+	for _, record := range records {
+		if _, ok := seen[record.RequestID]; ok {
+			continue
+		}
+		seen[record.RequestID] = struct{}{}
+		order = append(order, record.RequestID)
+	}
+	if len(order) <= cap {
+		return records, false
+	}
+	drop := order[len(order)-1]
+	kept := make([]auditdomain.Record, 0, len(records))
+	for _, record := range records {
+		if record.RequestID != drop {
+			kept = append(kept, record)
+		}
+	}
+	return kept, true
 }
 
 func loadCallStatusHistory(records []auditdomain.Record, err error) ([]auditdomain.Record, bool, error) {

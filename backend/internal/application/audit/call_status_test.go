@@ -12,6 +12,24 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 )
 
+func TestKeepNewestRequestsKeepsEveryAttempt(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	records := []auditdomain.Record{
+		{RequestID: "new", CreatedAt: now},
+		{RequestID: "old", CreatedAt: now.Add(-time.Minute)},
+		{RequestID: "old", CreatedAt: now.Add(-2 * time.Minute)},
+	}
+	kept, truncated := keepNewestRequests(records, 1)
+	if !truncated || len(kept) != 1 || kept[0].RequestID != "new" {
+		t.Fatalf("kept = %#v truncated=%v", kept, truncated)
+	}
+	all, truncated := keepNewestRequests(records, 2)
+	if truncated || len(all) != 3 {
+		t.Fatalf("all = %#v truncated=%v", all, truncated)
+	}
+}
+
 func TestAccountCallStatusClassifiesAndExcludesProbes(t *testing.T) {
 	ctx := context.Background()
 	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "call-status.db"))

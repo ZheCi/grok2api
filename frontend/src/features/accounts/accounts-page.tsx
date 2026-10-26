@@ -89,6 +89,7 @@ import {
 } from "@/features/accounts/accounts-api";
 import { AccountQuota, ConsoleQuota, WebQuota } from "@/features/accounts/account-quota";
 import { AccountNameCell } from "@/features/accounts/account-name-cell";
+import { InventoryMoveDialog } from "@/features/accounts/inventory-move-dialog";
 import { WebAccountScriptsDialog } from "@/features/accounts/web-account-scripts";
 import { WebAccountSettingsDialogs, WebAccountSettingsMenu, type WebAccountConfirmationTarget } from "@/features/accounts/web-account-settings";
 import { getQualityGuardStatus, qualityGuardCallStatusThresholds } from "@/features/quality-guard/quality-guard-api";
@@ -177,6 +178,8 @@ export function AccountsPage() {
   const [exportCompletedCount, setExportCompletedCount] = useState(0);
   const [syncAllOpen, setSyncAllOpen] = useState(false);
   const [detectDialogOpen, setDetectDialogOpen] = useState(false);
+  const [stockOpen, setStockOpen] = useState(false);
+  const [stockIds, setStockIds] = useState<string[]>([]);
   const [detectMode, setDetectMode] = useState<"selected" | "all">("all");
   const [allQuotaTask, setAllQuotaTask] = useState<BuildQuotaTask>("sync");
   const [quotaSyncProgress, setQuotaSyncProgress] = useState<AccountTaskProgressDTO | null>(null);
@@ -1479,6 +1482,7 @@ export function AccountsPage() {
             {selected.size > 0 ? (
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="mr-1 text-xs text-muted-foreground">{t("common.selectedCount", { count: selected.size })}</span>
+                <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => { setStockIds([...selected]); setStockOpen(true); }}>入库</Button>
                 <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={openSelectedExport}><Download />{t("accounts.exportAuth")}</Button>
                 <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => batchUpdateMutation.mutate(true)}>{t("common.enable")}</Button>
                 <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => batchUpdateMutation.mutate(false)}>{t("common.disable")}</Button>
@@ -1579,6 +1583,7 @@ export function AccountsPage() {
                         <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-8" aria-label={t("common.actions")}><MoreHorizontal /></Button></DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => beginEdit(account)}><Pencil />{t("common.edit")}</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => { setStockIds([account.id]); setStockOpen(true); }}>入库</DropdownMenuItem>
                           {provider === "grok_web" ? <DropdownMenuItem onClick={() => openWebConversion([account.id])}><ArrowRight />{t("accountConversion.action")}</DropdownMenuItem> : null}
                           {provider === "grok_web" ? (
                             <WebAccountSettingsMenu
@@ -1670,6 +1675,7 @@ export function AccountsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <InventoryMoveDialog mode="stock" ids={stockIds} open={stockOpen} onOpenChange={setStockOpen} />
       <Dialog open={detectDialogOpen} onOpenChange={closeDetectDialog}>
         <DialogContent className="max-w-xl gap-4 sm:max-w-2xl">
           <DialogHeader>
@@ -2392,13 +2398,13 @@ function AccountMetricPanel({ icon, label, value, detail, detailItems, loading, 
   );
 }
 
-function WebAccountType({ tier }: { tier?: AccountDTO["webTier"] }) {
+export function WebAccountType({ tier }: { tier?: AccountDTO["webTier"] }) {
   const { t } = useTranslation();
   const label = tier === "basic" ? t("accountType.free") : tier === "super" ? t("accountType.super") : tier === "heavy" ? t("accountType.heavy") : t("accountType.auto");
   return <AccountTypeText label={label} variant={tier === "basic" ? "free" : "default"} />;
 }
 
-function AccountType({ quota }: { quota: QuotaDTO }) {
+export function AccountType({ quota }: { quota: QuotaDTO }) {
   const { t } = useTranslation();
   if (quota.type === "unknown") {
     return <AccountTypeText label={t("accountType.pending")} title={t("accountType.pendingDescription")} variant="muted" />;
@@ -2409,14 +2415,14 @@ function AccountType({ quota }: { quota: QuotaDTO }) {
   return <AccountTypeText label={label} variant={isFree ? "free" : "default"} />;
 }
 
-function AccountTypeText({ label, title, variant }: { label: string; title?: string; variant: "default" | "free" | "muted" }) {
+export function AccountTypeText({ label, title, variant }: { label: string; title?: string; variant: "default" | "free" | "muted" }) {
   if (variant === "muted") {
     return <span title={title ?? label} className="text-xs text-muted-foreground">{label}</span>;
   }
   return <span title={title ?? label} className={cn("max-w-32 truncate text-xs font-medium", variant === "free" ? "text-emerald-700 dark:text-emerald-300" : "text-primary")}>{label}</span>;
 }
 
-function AccountStatus({ account, callStatus, onOpenCallStatus }: {
+export function AccountStatus({ account, callStatus, onOpenCallStatus }: {
   account: AccountDTO;
   callStatus?: AccountCallStatusDTO;
   onOpenCallStatus: () => void;

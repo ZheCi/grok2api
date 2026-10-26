@@ -129,6 +129,13 @@ type Input struct {
 	// ForcedAccountID is paired with ForcedEgressNodeID only by the internal
 	// Quality Guard recovery path. It never accepts public request input.
 	ForcedAccountID uint64
+	// holdDespiteForcedNode keeps the live quality hold on for an inventory test
+	// that must pin a node. Ordinary probes still skip the hold.
+	holdDespiteForcedNode bool
+	// skipQualityPenalty records the judgment without cooling, disabling, or arming node avoidance.
+	skipQualityPenalty bool
+	// allowBoundNodeOverride lets an inventory test use a node other than the account binding.
+	allowBoundNodeOverride bool
 }
 
 type Usage struct {
@@ -205,6 +212,10 @@ type Service struct {
 	clientKeys                  *clientkeyapp.Service
 	providers                   *provider.Registry
 	selector                    *Selector
+	inventoryProbeClientKeyID   uint64
+	inventoryProbeModel         string
+	inventoryProbePrompt        string
+	inventoryProbeMaxTokens     int
 	responses                   repository.ResponseRepository
 	maxAttempts                 atomic.Int64
 	videoMaxAttempts            atomic.Int64
@@ -1075,6 +1086,9 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	forwardResponse := func(lease *accountLease, credential accountdomain.Credential, billing *accountdomain.Billing) (*provider.Response, error) {
 		started := time.Now()
 		responseStartedAt = started
+		if firstToken != nil {
+			firstToken.reset(started)
+		}
 		lease.markSelectorUpstreamStarted()
 		stopKeepalive := startStreamRequestKeepalive(physicalCallCtx)
 		response, err := adapter.ForwardResponse(physicalCallCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, TransientRetry: buildTransientRetryCount(credential, &transientRetryAccount, &transientRetry), IdempotencyID: idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(operation), NormalizedMetadata: normalizedMetadata})
@@ -1145,7 +1159,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 				if successful && input.Streaming {
 					record.FirstTokenMS = firstToken.milliseconds()
 				}
-				record.DurationMS = time.Since(startedAt).Milliseconds()
+				record.DurationMS = time.Since(upstreamStartedAt).Milliseconds()
 				record.ErrorCode = errorCode
 				attempts := failureAttempts.snapshot()
 				if !successful && len(attempts) == 0 {
@@ -1250,7 +1264,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 			return
 		}
 		if recordDegraded {
-			s.recordQualityDegraded(ctx, auditBase, fallback.credential, fallback.usage, startedAt, egressTrace, route.Provider)
+			s.recordQualityDegraded(ctx, auditBase, fallback.credential, fallback.usage, fallback.upstreamStartedAt, egressTrace, route.Provider)
 			failureAttempts.captureQualityDegraded(fallback.credential, fallback.upstreamStartedAt)
 		}
 		_ = fallback.response.Body.Close()
@@ -1272,7 +1286,7 @@ attemptLoop:
 				// An unbound account can still have reached the observed node through
 				// runtime pool selection. The Provider request below carries the forced
 				// node explicitly; only a conflicting concrete binding is invalid.
-				if err == nil && lease.Credential.EgressNodeID != 0 && lease.Credential.EgressNodeID != input.ForcedEgressNodeID {
+				if err == nil && !input.allowBoundNodeOverride && lease.Credential.EgressNodeID != 0 && lease.Credential.EgressNodeID != input.ForcedEgressNodeID {
 					lease.Release()
 					lease = nil
 					err = &SelectionUnavailableError{Reason: SelectionNoAccounts}
@@ -1679,7 +1693,10 @@ attemptLoop:
 					hasNextAccount = false
 				}
 				commit := CommitQualityHold(verdict, qualityAccountAttempts-1, holdCfg.MaxAttempts, hasNextAccount, holdCfg.OnExhausted)
-				if verdict == QualityWithhold {
+				if input.skipQualityPenalty && verdict == QualityWithhold {
+					commit = QualityCommit{Action: QualityActionReject, Audit: true, KeepBody: false}
+				}
+				if verdict == QualityWithhold && !input.skipQualityPenalty {
 					if s.selector != nil {
 						s.selector.NoteNodeQualityDegraded(credential.EgressNodeID, time.Now().UTC())
 					}
@@ -1698,7 +1715,7 @@ attemptLoop:
 				}
 				deferFailOpenAudit := commit.Action == QualityActionRetry && holdCfg.OnExhausted == qualityRetryFailOpen
 				if commit.Audit && !deferFailOpenAudit {
-					s.recordQualityDegraded(ctx, auditBase, credential, peekUsage, startedAt, egressTrace, route.Provider)
+					s.recordQualityDegraded(ctx, auditBase, credential, peekUsage, responseStartedAt, egressTrace, route.Provider)
 					failureAttempts.captureQualityDegraded(credential, responseStartedAt)
 				}
 				switch commit.Action {
@@ -1736,7 +1753,7 @@ attemptLoop:
 					s.logger.Info("quality_degraded_deliver_last", "request_id", input.RequestID, "account_id", credential.ID, "quality_attempt", qualityAccountAttempts, "output_tokens", peekUsage.OutputTokens)
 				case QualityActionDeliver:
 					discardFallback(true)
-					if s.selector != nil {
+					if s.selector != nil && !input.skipQualityPenalty {
 						s.selector.NoteNodeQualityDelivered(credential.EgressNodeID, time.Now().UTC())
 					}
 				}

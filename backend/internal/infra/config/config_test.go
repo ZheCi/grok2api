@@ -243,7 +243,7 @@ func TestAutoDisableValidatesRequestPolicyWithoutSidecar(t *testing.T) {
 		change func(*QualityGuardConfig)
 	}{
 		{"retry limit", func(c *QualityGuardConfig) { c.RequestRetry.MaxAttempts = 7 }},
-		{"hold timeout", func(c *QualityGuardConfig) { c.RequestRetry.HoldTimeout = Duration(time.Minute) }},
+		{"hold timeout", func(c *QualityGuardConfig) { c.RequestRetry.HoldTimeout = Duration(181 * time.Second) }},
 		{"output floor", func(c *QualityGuardConfig) { c.RequestRetry.MinOutputTokens = 1 }},
 		{"soft TPS", func(c *QualityGuardConfig) { c.SoftTPS = 0 }},
 		{"hard TPS", func(c *QualityGuardConfig) { c.HardTPS = c.SoftTPS }},

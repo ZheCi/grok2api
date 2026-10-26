@@ -744,6 +744,47 @@ func TestAuditRepositoryListRecentByAccounts(t *testing.T) {
 	}
 }
 
+func TestListRecentSinceKeepsEveryAttemptOfARequest(t *testing.T) {
+	ctx := context.Background()
+	database, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "audit-by-request.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewAuditRepository(database)
+	now := time.Now().UTC()
+	accountA := uint64(11)
+	values := []audit.Record{
+		{RequestID: "same", ClientKeyID: 1, ModelRouteID: 1, AccountID: &accountA, StatusCode: 200, CreatedAt: now.Add(-2 * time.Hour)},
+		{RequestID: "same", ClientKeyID: 1, ModelRouteID: 1, AccountID: &accountA, StatusCode: 200, CreatedAt: now.Add(-90 * time.Minute)},
+		{RequestID: "newer", ClientKeyID: 1, ModelRouteID: 1, AccountID: &accountA, StatusCode: 200, CreatedAt: now.Add(-20 * time.Minute)},
+	}
+	if err := repository.CreateBatch(ctx, values); err != nil {
+		t.Fatal(err)
+	}
+	byRequest, err := repository.ListRecentSince(ctx, repositorypkg.AuditHistoryQuery{
+		Start: now.Add(-4 * time.Hour), End: now, RequestLimit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byRequest) != 1 || byRequest[0].RequestID != "newer" {
+		t.Fatalf("newest request = %v", recentIDs(byRequest))
+	}
+	both, err := repository.ListRecentSince(ctx, repositorypkg.AuditHistoryQuery{
+		Start: now.Add(-4 * time.Hour), End: now, RequestLimit: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(both) != 3 {
+		t.Fatalf("two requests = %v", recentIDs(both))
+	}
+}
+
 func recentIDs(values []audit.Record) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {

@@ -97,6 +97,9 @@ type AccountListFilter struct {
 	FailClosed    *bool
 	AccountIDs    []uint64
 	RestrictIDs   bool
+	// Inventory 为空时只列出不在库存中的账号；stocked 只列出库存账号。
+	Inventory        string
+	InventoryGroupID uint64
 	ExcludeIDs    []uint64
 	AfterID       uint64
 	ThroughID     uint64

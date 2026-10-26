@@ -519,13 +519,32 @@ func TestObserveQualityConvertedEncryptedThinking(t *testing.T) {
 			state := qualityScanState{protocol: test.protocol}
 			ObserveQualityChunk(&state, converted)
 			sig := state.signals()
-			if !sig.HasThinking {
-				t.Fatalf("converted encrypted thinking evidence was lost:\n%s", converted)
+			if !sig.HasThinking || sig.PlaintextThinking {
+				t.Fatalf("floor-sized cipher must count as encrypted thinking, not plaintext:\n%s\n%#v", converted, sig)
 			}
-			if got := ClassifyQualityHold(sig, 32); got != QualityDeliver {
-				t.Fatalf("converted encrypted thinking verdict = %s (%#v)", got, sig)
+			if got := ClassifyQualityHold(sig, 32); got != QualityWithhold {
+				t.Fatalf("fast cipher dump must withhold like the responses path = %s (%#v)", got, sig)
 			}
 		})
+	}
+}
+
+func TestObserveQualityChunkShortEvidenceCommentIsNotThinking(t *testing.T) {
+	t.Parallel()
+	content := strings.Repeat("word ", 40)
+	state := qualityScanState{protocol: qualityProtocolChat}
+	ObserveQualityChunk(&state, []byte(sse(
+		": grok2api-reasoning-evidence 20",
+		`data: {"choices":[{"delta":{"content":"`+content+`"}}]}`,
+		`data: {"usage":{"completion_tokens":90,"completion_tokens_details":{"reasoning_tokens":60}}}`,
+		"data: [DONE]",
+	)))
+	sig := state.signals()
+	if sig.HasThinking || sig.PlaintextThinking || sig.EncryptedBytes != 20 || sig.ReasoningTokens != 60 {
+		t.Fatalf("short evidence comment signals = %#v", sig)
+	}
+	if got := ClassifyQualityHold(sig, 32); got != QualityWithhold {
+		t.Fatalf("short evidence comment must withhold, got %s (%#v)", got, sig)
 	}
 }
 
@@ -1444,6 +1463,84 @@ func TestShouldHoldQualityStreamGates(t *testing.T) {
 	toolCache.AllowClientToolCacheRoute = true
 	if !shouldHoldQualityStream(toolCache, nil, route, audit.OperationChat, cfg) {
 		t.Fatal("client identity/cache compatibility alone must not disable the hold")
+	}
+}
+
+func TestInventoryProbeDeliverKeepsNodeSkip(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "inventory-probe-skip.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accountRepo := relational.NewAccountRepository(database)
+	nodeID, _ := createBuildNodes(t, ctx, database)
+	modelRepo := relational.NewModelRepository(database)
+	auditRepo := relational.NewAuditRepository(database)
+	responseRepo := relational.NewResponseRepository(database)
+	keyRepo := relational.NewClientKeyRepository(database)
+	credential, _, err := accountRepo.UpsertByIdentity(ctx, accountdomain.Credential{
+		Provider: accountdomain.ProviderBuild, Name: "inventory-probe", SourceKey: "inventory-probe",
+		EncryptedAccessToken: "inventory-probe", EncryptedRefreshToken: "refresh-inventory-probe",
+		ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: accountdomain.AuthStatusActive,
+		Priority: 200, MaxConcurrent: 1, EgressNodeID: nodeID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := modelRepo.UpsertDiscovered(ctx, accountdomain.ProviderBuild, []string{"grok-4.6"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := modelRepo.ReplaceAccountCapabilities(ctx, credential.ID, []string{"grok-4.6"}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	clientKey, err := keyRepo.Create(ctx, clientkey.Key{
+		Name: "inventory-probe-key", Prefix: "invpr", SecretHash: strings.Repeat("a", 64), EncryptedSecret: "encrypted",
+		Enabled: true, RPMLimit: 120, MaxConcurrent: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thinking := sse(
+		`data: {"choices":[{"delta":{"thinking_content":"plan the answer"}}]}`,
+		`data: {"choices":[{"delta":{"content":"the answer"}}]}`,
+		`data: {"usage":{"completion_tokens":40,"completion_tokens_details":{"reasoning_tokens":20}}}`,
+		"data: [DONE]",
+	)
+	adapter := &scriptedBuildAdapter{responses: map[uint64][]scriptedBuildResponse{
+		credential.ID: {{status: http.StatusOK, body: thinking}},
+	}}
+	registry := provider.NewRegistry(adapter)
+	sticky := memory.NewStickyStore()
+	accountService := accountapp.NewService(accountRepo, auditRepo, memory.NewDeviceSessionStore(), sticky, registry, testCipher(t), nil)
+	selector := NewSelector(accountRepo, memory.NewConcurrencyLimiter(), sticky, registry, time.Hour, time.Second, time.Minute)
+	service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(nil, nil, nil, 60, 4, nil), registry, selector, responseRepo, 3)
+	service.UpdateQualityRetry(QualityRetryRuntime{Enabled: true, MaxAttempts: 2, MinOutputTokens: 8, OnExhausted: qualityRetryFailClosed, HoldTimeout: time.Second})
+	selector.SetNodeQualityLimits(0, 2, time.Minute, time.Minute)
+	now := time.Now().UTC()
+	selector.NoteNodeQualityDegraded(nodeID, now)
+	selector.NoteNodeQualityDegraded(nodeID, now)
+	if !selector.nodeQuality.inspect(nodeID).skipOnce {
+		t.Fatal("fixture did not arm the one-shot node skip")
+	}
+	result, err := service.CreateChatCompletion(ctx, Input{
+		RequestID: "req-inventory-probe", ClientKey: clientKey, PublicModel: "grok-4.6", Streaming: true,
+		Body:                  []byte(`{"model":"grok-4.6","messages":[{"role":"user","content":"hi"}],"stream":true}`),
+		ForcedEgressNodeID:    nodeID,
+		ForcedAccountID:       credential.ID,
+		holdDespiteForcedNode: true, skipQualityPenalty: true, allowBoundNodeOverride: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(result.Body)
+	result.Finalize(Usage{}, "", "")
+	_ = result.Body.Close()
+	if !selector.nodeQuality.inspect(nodeID).skipOnce {
+		t.Fatal("inventory probe delivery cleared the node skip")
 	}
 }
 

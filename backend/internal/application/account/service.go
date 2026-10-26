@@ -330,6 +330,9 @@ type ListFilter struct {
 	MinGenMS      *int64
 	FailClosed    *bool
 	Sort          repository.SortQuery
+	// Inventory 为空时排除库存；stocked 只返回库存。
+	Inventory        string
+	InventoryGroupID uint64
 }
 
 type Summary struct {
@@ -447,6 +450,7 @@ type Service struct {
 	conversionPool      *batch.Pool
 	syncPool            *batch.Pool
 	refreshPool         *batch.Pool
+	inventoryJob        *inventoryJobState
 	// detectPool 专用于管理端「检测账号」，与额度同步/续期隔离，默认并发 32。
 	detectPool             *batch.Pool
 	credentialRefreshWake  chan struct{}
@@ -575,7 +579,8 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 		(filter.Agreement != "" && filter.Provider != string(accountdomain.ProviderWeb)) ||
 		!validAssociationFilter(filter.Provider, filter.Association) ||
 		!validCallQualityMetrics(filter) ||
-		!repository.IsValidSort(filter.Sort, "name", "type", "status", "createdAt") {
+		!oneOf(filter.Inventory, "", "stocked") ||
+		!repository.IsValidSort(filter.Sort, "name", "type", "status", "createdAt", "stockedAt") {
 		return nil, 0, ErrInvalidFilter
 	}
 	var refreshable *bool
@@ -591,6 +596,7 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 		FailStreakMin: filter.FailStreakMin, FailStreakMax: filter.FailStreakMax,
 		FailRateMin: filter.FailRateMin, FailRateMax: filter.FailRateMax,
 		SoftTPS: filter.SoftTPS, HardTPS: filter.HardTPS, MinGenMS: filter.MinGenMS, FailClosed: filter.FailClosed,
+		Inventory: filter.Inventory, InventoryGroupID: filter.InventoryGroupID,
 		Now: s.now(),
 	}
 	if filter.Risk != "" {

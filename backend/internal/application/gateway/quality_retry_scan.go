@@ -199,10 +199,9 @@ func ObserveQualityChunk(state *qualityScanState, chunk []byte) {
 			continue
 		}
 		if bytes.HasPrefix(line, []byte(qualityReasoningEvidenceSSEComment)) {
-			// Protocol converters cannot expose encrypted_content in every public
-			// JSON contract. The comment is `: grok2api-reasoning-evidence <bytes>`.
+			// Byte count only. A short cipher stub is not thinking until it
+			// meets the floor in signals().
 			state.reasoningStarted = true
-			state.hasThinking = true
 			if fields := bytes.Fields(line); len(fields) >= 2 {
 				if n, err := strconv.Atoi(string(fields[len(fields)-1])); err == nil && n > state.encryptedBytes {
 					state.encryptedBytes = n

@@ -169,6 +169,12 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/accounts/:id/refresh-token", h.refreshToken)
 	router.POST("/accounts/:id/refresh-billing", h.refreshBilling)
 	router.POST("/accounts/:id/refresh-quota", h.refreshWebQuota)
+	router.GET("/inventory/groups", h.listInventoryGroups)
+	router.POST("/inventory/groups", h.createInventoryGroup)
+	router.POST("/accounts/inventory", h.stockAccounts)
+	router.POST("/accounts/inventory/remove", h.unstockAccounts)
+	router.GET("/inventory/quality-tests/current", h.currentInventoryQuality)
+	router.POST("/inventory/quality-tests", h.startInventoryQuality)
 }
 
 type updateRequest struct {
@@ -330,6 +336,9 @@ type accountResponse struct {
 	Billing                     *billingResponse        `json:"billing,omitempty"`
 	Quota                       quotaResponse           `json:"quota"`
 	QuotaWindows                []quotaWindowResponse   `json:"quotaWindows,omitempty"`
+	InventoryGroupID            uint64                  `json:"inventoryGroupId,omitempty,string"`
+	StockedAt                   *time.Time              `json:"stockedAt,omitempty"`
+	QualityVerdict              string                  `json:"qualityVerdict,omitempty"`
 }
 
 type linkedAccountResponse struct {
@@ -433,6 +442,7 @@ func (h *Handler) list(c *gin.Context) {
 		CallCountMin: callCountMin, CallCountMax: callCountMax, FailStreakMin: failStreakMin, FailStreakMax: failStreakMax,
 		FailRateMin: failRateMin, FailRateMax: failRateMax,
 		SoftTPS: softTPS, HardTPS: hardTPS, MinGenMS: minGenMS, FailClosed: failClosed,
+		Inventory: c.Query("inventory"), InventoryGroupID: queryUint(c, "groupId"),
 		Sort: repository.SortQuery{Field: c.Query("sortBy"), Direction: repository.SortDirection(c.Query("sortOrder"))},
 	})
 	if errors.Is(err, accountapp.ErrInvalidFilter) {
@@ -1536,6 +1546,9 @@ func newAccountResponse(value accountapp.View) accountResponse {
 		BuildBotFlagSource:         buildBotFlagSourceResponse(c.Provider, value.BuildBotFlagged, value.BuildBotFlagSource),
 		EgressNodeID:               c.EgressNodeID,
 		EgressAssignmentMode:       string(c.EgressAssignmentMode),
+		InventoryGroupID:           c.InventoryGroupID,
+		StockedAt:                  c.StockedAt,
+		QualityVerdict:             c.QualityVerdict,
 		Quota:                      newQuotaResponse(value.Quota), QuotaWindows: make([]quotaWindowResponse, 0, len(value.QuotaWindows)),
 	}
 	for _, linked := range c.LinkedAccounts {

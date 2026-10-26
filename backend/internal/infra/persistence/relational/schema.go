@@ -29,6 +29,7 @@ var schemaModels = []any{
 	&egressNodeModel{},
 	&egressOperationsConfigModel{},
 	&accountModel{},
+	&inventoryGroupModel{},
 	&accountCredentialModel{},
 	&accountProviderLinkModel{},
 	&webConsoleAccountLinkModel{},
@@ -54,6 +55,7 @@ var schemaModels = []any{
 	&mediaAssetModel{},
 	&mediaUploadTicketModel{},
 	&runtimeSettingsModel{},
+	&nodeQualityAvoidanceModel{},
 }
 
 var schemaIndexes = []string{
@@ -157,6 +159,9 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	}
 	if migrateErr != nil {
 		return fmt.Errorf("初始化数据库表: %w", migrateErr)
+	}
+	if err := d.ensureDefaultInventoryGroup(ctx); err != nil {
+		return fmt.Errorf("初始化默认库存分组: %w", err)
 	}
 	if hadGlobalSubscriptionProxy {
 		if err := d.migratePerSourceSubscriptionProxy(ctx); err != nil {

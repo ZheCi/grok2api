@@ -461,7 +461,7 @@ func CommitQualityHold(verdict QualityVerdict, qualityAttempt, maxAttempts int, 
 }
 
 func shouldHoldQualityStream(input Input, ownership *inferencedomain.ResponseOwnership, route modeldomain.Route, operation audit.Operation, cfg QualityRetryRuntime) bool {
-	if !cfg.Enabled || !input.Streaming || input.ForcedEgressNodeID != 0 || input.skipQualityHold {
+	if !cfg.Enabled || !input.Streaming || (input.ForcedEgressNodeID != 0 && !input.holdDespiteForcedNode) || input.skipQualityHold {
 		return false
 	}
 	switch operation {

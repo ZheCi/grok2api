@@ -133,6 +133,14 @@ func (r *AccountRepository) List(ctx context.Context, input repository.AccountLi
 	if input.Filter.ThroughID > 0 {
 		query = query.Where("provider_accounts.id <= ?", input.Filter.ThroughID)
 	}
+	if input.Filter.Inventory == "stocked" {
+		query = query.Where("provider_accounts.inventory_group_id IS NOT NULL")
+		if input.Filter.InventoryGroupID > 0 {
+			query = query.Where("provider_accounts.inventory_group_id = ?", input.Filter.InventoryGroupID)
+		}
+	} else {
+		query = query.Where("provider_accounts.inventory_group_id IS NULL")
+	}
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
@@ -140,6 +148,7 @@ func (r *AccountRepository) List(ctx context.Context, input repository.AccountLi
 	query = applyStableSort(query, input.Page.Sort, map[string]sortSpec{
 		"id":        {expression: "provider_accounts.id"},
 		"name":      {expression: "LOWER(provider_accounts.name)"},
+		"stockedAt": {expression: "provider_accounts.stocked_at"},
 		"type":      {expression: accountTypeSortExpression},
 		"status":    {expression: accountStatusSortExpression},
 		"createdAt": {expression: "provider_accounts.created_at", defaultDirection: repository.SortDescending},
@@ -350,7 +359,7 @@ func (r *AccountRepository) Summarize(ctx context.Context, now time.Time) ([]rep
 		true, account.AuthStatusActive,
 		false,
 		true, account.AuthStatusReauthRequired,
-	).Group("provider").Scan(&rows).Error
+	).Where("inventory_group_id IS NULL").Group("provider").Scan(&rows).Error
 	return rows, err
 }
 
@@ -586,7 +595,7 @@ func (r *AccountRepository) listRoutingCredentials(ctx context.Context, provider
 func (r *AccountRepository) listActiveProviderAccountRows(ctx context.Context, provider account.Provider, credentialColumns []string) ([]accountModel, error) {
 	var rows []accountModel
 	if err := r.db.db.WithContext(ctx).
-		Where("provider = ? AND enabled = ? AND auth_status = ?", provider, true, account.AuthStatusActive).
+		Where("provider = ? AND enabled = ? AND auth_status = ? AND inventory_group_id IS NULL", provider, true, account.AuthStatusActive).
 		Order("priority DESC, id ASC").
 		Find(&rows).Error; err != nil {
 		return nil, err
@@ -608,7 +617,7 @@ func (r *AccountRepository) listActiveProviderAccountRows(ctx context.Context, p
 		Table("account_credentials AS credential").
 		Select(credentialSelect).
 		Joins("JOIN provider_accounts AS account ON account.id = credential.account_id").
-		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ?", provider, true, account.AuthStatusActive).
+		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ? AND account.inventory_group_id IS NULL", provider, true, account.AuthStatusActive).
 		Find(&credentials).Error; err != nil {
 		return nil, err
 	}
@@ -876,7 +885,7 @@ func (r *AccountRepository) ListEnabledAccountIDs(ctx context.Context, provider 
 	query := r.db.db.WithContext(ctx).
 		Table("provider_accounts AS account").
 		Select("account.id").
-		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ?", provider, true, account.AuthStatusActive)
+		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ? AND account.inventory_group_id IS NULL", provider, true, account.AuthStatusActive)
 	if refreshableOnly {
 		query = query.
 			Joins("JOIN account_credentials AS credential ON credential.account_id = account.id").
@@ -891,7 +900,7 @@ func (r *AccountRepository) ListEnabledCredentialRefreshAccountIDs(ctx context.C
 	query := r.db.db.WithContext(ctx).
 		Table("provider_accounts AS account").
 		Select("account.id").
-		Where("account.provider = ? AND account.enabled = ? AND account.auth_status IN ?", provider, true, []account.AuthStatus{account.AuthStatusActive, account.AuthStatusReauthRequired})
+		Where("account.provider = ? AND account.enabled = ? AND account.auth_status IN ? AND account.inventory_group_id IS NULL", provider, true, []account.AuthStatus{account.AuthStatusActive, account.AuthStatusReauthRequired})
 	if refreshableOnly {
 		query = query.
 			Joins("JOIN account_credentials AS credential ON credential.account_id = account.id").
@@ -1007,15 +1016,6 @@ func (r *AccountRepository) ListMissingConsoleSyncBatch(ctx context.Context, aft
 		values = append(values, toAccountDomain(row))
 	}
 	return values, total, skipped, nil
-}
-
-func (r *AccountRepository) HasActive(ctx context.Context, provider account.Provider) (bool, error) {
-	var row struct{ ID uint64 }
-	err := r.db.db.WithContext(ctx).Model(&accountModel{}).Select("id").Where("provider = ? AND enabled = ? AND auth_status = ?", provider, true, account.AuthStatusActive).Take(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return false, nil
-	}
-	return row.ID > 0, err
 }
 
 func (r *AccountRepository) Get(ctx context.Context, id uint64) (account.Credential, error) {
@@ -2155,7 +2155,7 @@ func (r *AccountRepository) ListDueCredentialRefreshIDs(ctx context.Context, now
 		Table("account_credentials AS credential").
 		Select("credential.account_id").
 		Joins("JOIN provider_accounts AS account ON account.id = credential.account_id").
-		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ?", account.ProviderBuild, true, account.AuthStatusActive).
+		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ? AND account.inventory_group_id IS NULL", account.ProviderBuild, true, account.AuthStatusActive).
 		Where("credential.auth_type = ? AND credential.encrypted_refresh <> '' AND credential.refresh_due_at IS NOT NULL AND credential.refresh_due_at <= ?", account.AuthTypeOAuth, now).
 		Order("credential.refresh_due_at ASC, credential.account_id ASC").Limit(limit).Scan(&ids).Error
 	return ids, err
@@ -2167,7 +2167,7 @@ func (r *AccountRepository) NextCredentialRefreshDueAt(ctx context.Context) (*ti
 		Table("account_credentials AS credential").
 		Select("credential.refresh_due_at").
 		Joins("JOIN provider_accounts AS account ON account.id = credential.account_id").
-		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ?", account.ProviderBuild, true, account.AuthStatusActive).
+		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ? AND account.inventory_group_id IS NULL", account.ProviderBuild, true, account.AuthStatusActive).
 		Where("credential.auth_type = ? AND credential.encrypted_refresh <> '' AND credential.refresh_due_at IS NOT NULL", account.AuthTypeOAuth).
 		Order("credential.refresh_due_at ASC, credential.account_id ASC").Limit(1).Scan(&rows).Error
 	if err != nil || len(rows) == 0 {

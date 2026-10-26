@@ -231,8 +231,13 @@ type Credential struct {
 	// BuildBotFlagSource 是从 Build access token 提取并持久化的非敏感路由元数据。
 	// 仅精确值 1、2 表示风控；0 表示未标记或非 Build 账号。
 	BuildBotFlagSource int
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// InventoryGroupID 非 0 表示账号在库存中，调度选不到它。
+	InventoryGroupID uint64
+	StockedAt        *time.Time
+	// QualityVerdict 是最近一次库存降智测试：""、ok、degraded。
+	QualityVerdict string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // CredentialMaterial contains the encrypted provider secrets and refresh

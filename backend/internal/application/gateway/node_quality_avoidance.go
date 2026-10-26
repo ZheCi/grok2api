@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"time"
@@ -45,6 +46,11 @@ func (s nodeQualitySnapshot) blocks(nodeID uint64) bool {
 
 // nodeQualityAvoidance counts quality-degraded attempts per egress node.
 // Transport errors and upstream HTTP failures are not recorded here.
+type nodeAvoidanceStore interface {
+	LoadNodeAvoidance(ctx context.Context, now time.Time) (map[uint64]time.Time, error)
+	SaveNodeAvoidance(ctx context.Context, nodeID uint64, until time.Time) error
+}
+
 type nodeQualityAvoidance struct {
 	mu            sync.Mutex
 	windowLimit   int
@@ -292,6 +298,43 @@ func (s *Selector) NoteNodeQualityDegraded(nodeID uint64, now time.Time) {
 		logger = slog.Default()
 	}
 	logger.Info("node_quality_avoid_armed", "node_id", nodeID, "window", armedAvoid, "skip_once", armedSkip)
+	if armedAvoid && s.nodeAvoidance != nil {
+		until := s.nodeQuality.inspect(nodeID).avoidUntil
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := s.nodeAvoidance.SaveNodeAvoidance(ctx, nodeID, until)
+		cancel()
+		if err != nil {
+			logger.Warn("node_quality_avoid_save_failed", "node_id", nodeID, "error", err)
+		}
+	}
+}
+
+func (s *Selector) LoadNodeAvoidance(ctx context.Context) error {
+	if s == nil || s.nodeAvoidance == nil {
+		return nil
+	}
+	until, err := s.nodeAvoidance.LoadNodeAvoidance(ctx, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	s.nodeQuality.restoreAvoidUntil(until)
+	return nil
+}
+
+func (a *nodeQualityAvoidance) restoreAvoidUntil(until map[uint64]time.Time) {
+	if a == nil || len(until) == 0 {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id, at := range until {
+		if id == 0 || at.IsZero() {
+			continue
+		}
+		state := a.stateLocked(id)
+		state.avoidUntil = at
+		state.avoidUntilUnix = at.UnixNano()
+	}
 }
 
 func (s *Selector) NoteNodeQualityDelivered(nodeID uint64, _ time.Time) {
