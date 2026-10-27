@@ -53,6 +53,32 @@ func (h *Handler) createInventoryGroup(c *gin.Context) {
 	response.Success(c, http.StatusOK, group)
 }
 
+func (h *Handler) deleteInventoryGroup(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		response.Error(c, http.StatusBadRequest, "invalidInput", "分组无效")
+		return
+	}
+	err = h.service.DeleteInventoryGroup(c.Request.Context(), id)
+	if errors.Is(err, accountapp.ErrInvalidInput) {
+		response.Error(c, http.StatusBadRequest, "invalidInput", "Default 分组不能删除")
+		return
+	}
+	if errors.Is(err, accountapp.ErrConflict) {
+		response.Error(c, http.StatusConflict, "inventoryGroupNotEmpty", "分组里还有账号，先移出后再删除")
+		return
+	}
+	if errors.Is(err, accountapp.ErrNotFound) {
+		response.Error(c, http.StatusNotFound, "inventoryGroupNotFound", "分组不存在")
+		return
+	}
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "inventoryGroupFailed", "删除库存分组失败")
+		return
+	}
+	response.Success(c, http.StatusOK, gin.H{"ok": true})
+}
+
 type inventoryMoveRequest struct {
 	IDs           []string `json:"ids"`
 	GroupID       string   `json:"groupId"`

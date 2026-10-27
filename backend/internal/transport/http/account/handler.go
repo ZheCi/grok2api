@@ -171,6 +171,7 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/accounts/:id/refresh-quota", h.refreshWebQuota)
 	router.GET("/inventory/groups", h.listInventoryGroups)
 	router.POST("/inventory/groups", h.createInventoryGroup)
+	router.DELETE("/inventory/groups/:id", h.deleteInventoryGroup)
 	router.POST("/accounts/inventory", h.stockAccounts)
 	router.POST("/accounts/inventory/remove", h.unstockAccounts)
 	router.GET("/inventory/quality-tests/current", h.currentInventoryQuality)

@@ -13,6 +13,7 @@ import (
 type inventoryRepository interface {
 	ListInventoryGroups(context.Context) ([]repository.InventoryGroup, error)
 	CreateInventoryGroup(context.Context, string) (repository.InventoryGroup, error)
+	DeleteInventoryGroup(context.Context, uint64) error
 	InventoryGroupByName(context.Context, string) (repository.InventoryGroup, error)
 	StockAccounts(context.Context, []uint64, uint64, time.Time) error
 	UnstockAccounts(context.Context, []uint64, time.Time) error
@@ -99,6 +100,28 @@ func (s *Service) CreateInventoryGroup(ctx context.Context, name string) (reposi
 		return repository.InventoryGroup{}, ErrConflict
 	}
 	return group, err
+}
+
+// DeleteInventoryGroup removes an empty group. Default is recreated on startup and cannot be deleted.
+func (s *Service) DeleteInventoryGroup(ctx context.Context, id uint64) error {
+	if id == 0 {
+		return ErrInvalidInput
+	}
+	repo, err := s.inventory()
+	if err != nil {
+		return err
+	}
+	err = repo.DeleteInventoryGroup(ctx, id)
+	if errors.Is(err, repository.ErrInvalidRecord) {
+		return ErrInvalidInput
+	}
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrNotFound
+	}
+	if errors.Is(err, repository.ErrConflict) {
+		return ErrConflict
+	}
+	return err
 }
 
 // StockAccounts moves the given accounts into a group. includeLinked also stocks

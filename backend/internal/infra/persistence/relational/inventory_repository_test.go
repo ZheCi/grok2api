@@ -2,6 +2,7 @@ package relational
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -83,6 +84,52 @@ func TestInventoryHidesStockedAccountsFromScheduling(t *testing.T) {
 	restored, err := repo.Get(ctx, held.ID)
 	if err != nil || restored.InventoryGroupID != 0 || restored.QualityVerdict != "degraded" {
 		t.Fatalf("unstock = group %d verdict %q err %v", restored.InventoryGroupID, restored.QualityVerdict, err)
+	}
+}
+
+func TestDeleteInventoryGroupKeepsDefaultAndOccupiedGroups(t *testing.T) {
+	ctx := context.Background()
+	database, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "inventory-delete.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewAccountRepository(database)
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	groups, err := repo.ListInventoryGroups(ctx)
+	if err != nil || len(groups) != 1 || groups[0].Name != "Default" {
+		t.Fatalf("groups = %#v, err = %v", groups, err)
+	}
+	if err := repo.DeleteInventoryGroup(ctx, groups[0].ID); !errors.Is(err, repository.ErrInvalidRecord) {
+		t.Fatalf("delete default = %v", err)
+	}
+	empty, err := repo.CreateInventoryGroup(ctx, "空组")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DeleteInventoryGroup(ctx, empty.ID); err != nil {
+		t.Fatal(err)
+	}
+	occupied, err := repo.CreateInventoryGroup(ctx, "有账号")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := accountModel{IdentityKey: testIdentityKey("inventory-delete"), Provider: "grok_build", Name: "held", SourceKey: "inventory-delete", Enabled: true, AuthStatus: "active", Priority: 1, CreatedAt: now, UpdatedAt: now}
+	if err := database.db.WithContext(ctx).Create(&held).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.StockAccounts(ctx, []uint64{held.ID}, occupied.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DeleteInventoryGroup(ctx, occupied.ID); !errors.Is(err, repository.ErrConflict) {
+		t.Fatalf("delete occupied = %v", err)
+	}
+	left, err := repo.ListInventoryGroups(ctx)
+	if err != nil || len(left) != 2 || left[0].Name != "Default" || left[1].Name != "有账号" {
+		t.Fatalf("groups after delete = %#v, err = %v", left, err)
 	}
 }
 

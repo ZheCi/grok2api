@@ -747,6 +747,10 @@ export function createInventoryGroup(name: string): Promise<InventoryGroupDTO> {
   return apiRequest("/api/admin/v1/inventory/groups", { method: "POST", body: { name } }, createValidatedDecoder("inventory group", inventoryGroupValidator));
 }
 
+export function deleteInventoryGroup(id: string): Promise<{ ok: boolean }> {
+  return apiRequest(`/api/admin/v1/inventory/groups/${id}`, { method: "DELETE" }, createObjectDecoder("delete inventory group", { ok: isBoolean }));
+}
+
 export function stockAccounts(input: { ids: string[]; groupId?: string; groupName?: string; includeLinked: boolean }): Promise<{ ok: boolean }> {
   return apiRequest("/api/admin/v1/accounts/inventory", { method: "POST", body: input }, createObjectDecoder("stock accounts", { ok: isBoolean }));
 }

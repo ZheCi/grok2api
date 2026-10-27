@@ -19,6 +19,7 @@ import { InventoryMoveDialog } from "@/features/accounts/inventory-move-dialog";
 import {
   currentInventoryQualityTest,
   deleteAccounts,
+  deleteInventoryGroup,
   detectBuildAccounts,
   listAccounts,
   listInventoryGroups,
@@ -128,6 +129,7 @@ export function InventoryPage() {
   const [moveOpen, setMoveOpen] = useState(false);
   const [unstockAllOpen, setUnstockAllOpen] = useState(false);
   const [deleteAllOpen, setDeleteAllOpen] = useState(false);
+  const [deleteGroupOpen, setDeleteGroupOpen] = useState(false);
   const [unstockVerdicts, setUnstockVerdicts] = useState<Set<QualityVerdict>>(new Set());
   const [deleteVerdicts, setDeleteVerdicts] = useState<Set<QualityVerdict>>(new Set());
   const [includeLinked, setIncludeLinked] = useState(false);
@@ -151,7 +153,9 @@ export function InventoryPage() {
     enabled: groupsQuery.isSuccess,
   });
   const items = accountsQuery.data?.items ?? [];
-  const groupName = groups.find((group) => group.id === activeGroup)?.name || "当前分组";
+  const activeGroupRecord = groups.find((group) => group.id === activeGroup);
+  const groupName = activeGroupRecord?.name || "当前分组";
+  const canDeleteGroup = Boolean(activeGroupRecord && activeGroupRecord.name !== "Default");
   const scopeLabel = debouncedSearch.trim() ? "当前搜索结果" : `分组「${groupName}」`;
   const accountIds = useMemo(() => uniqueAccountIds(items.map((account) => account.id)), [items]);
   const callStatusQuery = useQuery({
@@ -196,6 +200,16 @@ export function InventoryPage() {
   const deleteMutation = useMutation({
     mutationFn: (accounts: AccountDTO[]) => runByProvider(accounts, async (provider, ids) => { await deleteAccounts(ids, provider); }),
     onSuccess: () => { setSelected(new Set()); setConfirmAction(null); setDeleteAllOpen(false); toast.success("已删除"); void refreshAccounts(); },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const deleteGroupMutation = useMutation({
+    mutationFn: (id: string) => deleteInventoryGroup(id),
+    onSuccess: () => {
+      setDeleteGroupOpen(false);
+      setGroupId("");
+      toast.success("分组已删除");
+      void queryClient.invalidateQueries({ queryKey: ["inventory-groups"] });
+    },
     onError: (error: Error) => toast.error(error.message),
   });
   const unstockMutation = useMutation({
@@ -315,9 +329,12 @@ export function InventoryPage() {
   return (
     <div className="space-y-4">
       <PageHeader title="库存" description="库存中的账号不参与调度。移出后按原来的启用和冷却规则回到账号页。" actions={
-        <select className="h-9 rounded-md border bg-background px-3 text-sm" value={activeGroup} onChange={(event) => setGroupId(event.target.value)}>
-          {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-        </select>
+        <>
+          <select className="h-9 rounded-md border bg-background px-3 text-sm" value={activeGroup} onChange={(event) => setGroupId(event.target.value)} aria-label="库存分组">
+            {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+          </select>
+          <Button size="sm" variant="secondary" className="bg-destructive/10 text-destructive hover:bg-destructive/15 hover:text-destructive" disabled={!canDeleteGroup || deleteGroupMutation.isPending} title={activeGroupRecord?.name === "Default" ? "Default 分组不能删除" : undefined} onClick={() => setDeleteGroupOpen(true)}>删除分组</Button>
+        </>
       } />
       <DataTableShell toolbar={(
         <div className="flex w-full flex-wrap items-center gap-2">
@@ -407,6 +424,21 @@ export function InventoryPage() {
           <DialogFooter>
             <Button variant="secondary" disabled={unstockMutation.isPending} onClick={() => setUnstockAllOpen(false)}>取消</Button>
             <Button disabled={unstockMutation.isPending || scopeAccounts === null || unstockIds.length === 0} onClick={() => unstockMutation.mutate({ ids: unstockIds, includeLinked })}>移出 {unstockIds.length || ""}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={deleteGroupOpen} onOpenChange={(open) => { if (!deleteGroupMutation.isPending) setDeleteGroupOpen(open); }}>
+        <DialogContent className="max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>删除分组「{groupName}」？</DialogTitle>
+            <DialogDescription>只删除空分组。组里还有账号时，先把账号移出库存。</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="secondary" disabled={deleteGroupMutation.isPending} onClick={() => setDeleteGroupOpen(false)}>取消</Button>
+            <Button className="bg-destructive text-white hover:bg-destructive/90" disabled={deleteGroupMutation.isPending || !canDeleteGroup} onClick={() => { if (activeGroup) deleteGroupMutation.mutate(activeGroup); }}>
+              {deleteGroupMutation.isPending ? <Spinner /> : null}
+              删除分组
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

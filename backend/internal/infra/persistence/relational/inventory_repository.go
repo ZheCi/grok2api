@@ -6,6 +6,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"gorm.io/gorm"
+
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
@@ -54,6 +56,31 @@ func (r *AccountRepository) InventoryGroupByName(ctx context.Context, name strin
 		return repository.InventoryGroup{}, mapError(err)
 	}
 	return repository.InventoryGroup{ID: row.ID, Name: row.Name}, nil
+}
+
+// DeleteInventoryGroup removes an empty group. Default cannot be deleted.
+// A group that still holds accounts is left unchanged.
+func (r *AccountRepository) DeleteInventoryGroup(ctx context.Context, id uint64) error {
+	if id == 0 {
+		return repository.ErrInvalidRecord
+	}
+	return r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row inventoryGroupModel
+		if err := tx.Where("id = ?", id).Take(&row).Error; err != nil {
+			return mapError(err)
+		}
+		if row.Name == defaultInventoryGroupName {
+			return repository.ErrInvalidRecord
+		}
+		var count int64
+		if err := tx.Model(&accountModel{}).Where("inventory_group_id = ?", id).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return repository.ErrConflict
+		}
+		return tx.Delete(&inventoryGroupModel{}, id).Error
+	})
 }
 
 // StockAccounts puts accounts that are not already stocked into the group.
