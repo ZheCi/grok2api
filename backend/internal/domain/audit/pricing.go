@@ -232,6 +232,11 @@ func estimateRequestOutputLimit(body []byte) int64 {
 	return defaultOutputTokens
 }
 
+// EstimateRequestInputTokens approximates prompt size for scheduling bands.
+func EstimateRequestInputTokens(body []byte) int64 {
+	return estimateRequestInputTokens(body)
+}
+
 func estimateRequestInputTokens(body []byte) int64 {
 	var payload any
 	if json.Unmarshal(body, &payload) != nil {

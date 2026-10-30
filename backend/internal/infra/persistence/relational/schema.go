@@ -56,6 +56,7 @@ var schemaModels = []any{
 	&mediaUploadTicketModel{},
 	&runtimeSettingsModel{},
 	&nodeQualityAvoidanceModel{},
+	&accountWeightModel{},
 }
 
 var schemaIndexes = []string{
@@ -64,7 +65,7 @@ var schemaIndexes = []string{
 	// SQLite 通过重建表修改 CHECK 约束，重建会删除独立存储的 GORM 唯一索引；
 	// 在统一索引阶段显式恢复这些数据完整性约束。
 	"CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_accounts_identity_key ON provider_accounts(identity_key)",
-	"CREATE INDEX IF NOT EXISTS idx_accounts_routing ON provider_accounts(provider, enabled, auth_status, priority DESC, id ASC)",
+	"CREATE INDEX IF NOT EXISTS idx_accounts_routing ON provider_accounts(provider, enabled, auth_status, id ASC)",
 	"CREATE INDEX IF NOT EXISTS idx_accounts_created_id ON provider_accounts(created_at DESC, id DESC)",
 	"CREATE INDEX IF NOT EXISTS idx_accounts_auto_clean_reauth ON provider_accounts(auth_status, reauth_marked_at, id)",
 	"CREATE INDEX IF NOT EXISTS idx_accounts_auto_clean_reauth_cursor ON provider_accounts(auth_status, enabled, id, reauth_marked_at)",
@@ -233,6 +234,9 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	if err := d.dropModelPublicIDUniqueIndex(ctx); err != nil {
 		return fmt.Errorf("迁移模型路由名称唯一约束: %w", err)
 	}
+	if err := d.dropAccountPriority(ctx); err != nil {
+		return fmt.Errorf("迁移账号优先级: %w", err)
+	}
 	for _, statement := range schemaIndexes {
 		if err := db.Exec(statement).Error; err != nil {
 			return fmt.Errorf("初始化数据库索引: %w", err)
@@ -242,6 +246,39 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 		return fmt.Errorf("迁移模型 Provider 命名空间: %w", err)
 	}
 	return nil
+}
+
+// dropAccountPriority removes the manual scheduling priority. Selection uses
+// the computed account weight, so an existing index on that column is rebuilt
+// without it.
+func (d *Database) dropAccountPriority(ctx context.Context) error {
+	db := d.db.WithContext(ctx)
+	if !db.Migrator().HasTable("provider_accounts") || !db.Migrator().HasColumn("provider_accounts", "priority") {
+		return nil
+	}
+	var names []string
+	if d.dialect == "postgres" {
+		if err := db.Raw(`SELECT indexname FROM pg_indexes WHERE tablename = 'provider_accounts' AND indexdef ILIKE '%priority%'`).Scan(&names).Error; err != nil {
+			return err
+		}
+	} else {
+		if err := db.Raw(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'provider_accounts' AND sql LIKE '%priority%'`).Scan(&names).Error; err != nil {
+			return err
+		}
+	}
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if err := db.Exec("DROP INDEX IF EXISTS " + quoteSQLIdent(name)).Error; err != nil {
+			return err
+		}
+	}
+	return db.Exec("ALTER TABLE provider_accounts DROP COLUMN priority").Error
+}
+
+func quoteSQLIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // migrateStandaloneEgressProxyProfiles promotes existing manually managed

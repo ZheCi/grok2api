@@ -94,7 +94,7 @@ func TestEgressRepositoryPaginatesAndFiltersManagementList(t *testing.T) {
 	alphaID := created["alpha"].ID
 	if err := database.db.WithContext(ctx).Create(&accountModel{
 		IdentityKey: strings.Repeat("a", 64), Provider: "grok_build", Name: "bound", SourceKey: "bound-source",
-		Enabled: true, AuthStatus: "active", Priority: 1, MaxConcurrent: 8, EgressNodeID: &alphaID,
+		Enabled: true, AuthStatus: "active", MaxConcurrent: 8, EgressNodeID: &alphaID,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}

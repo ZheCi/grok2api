@@ -107,6 +107,17 @@ routing:
   # 0.05–1 限制单轮已绑定账号迁移比例。环境变量
   # GROK2API_AUTO_ASSIGN_MAX_MIGRATION_SHARE 可覆盖。
   autoAssignMaxMigrationShare: 0
+  # 账号权重代替手动优先级。占比不用加到 1。window 只能是 6h、24h、7d、30d、60d、90d，空着或 0 表示 24h。
+  accountWeight:
+    window: 24h
+    successRate: 0.50
+    callCount: 0
+    lastSuccess: 0
+    newbieProtection: 0.30
+    idleTime: 0.20
+    firstTokenSpeed: 0.30
+    newbieDays: 7
+    newbieDailyBase: 20
 
 audit:
   # [通常不要修改] 审计批量写入参数；bufferSize 的修改需重启生效。

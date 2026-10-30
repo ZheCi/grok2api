@@ -27,7 +27,7 @@ func TestRoutingProjectionLeavesSecretsAndLargeJSONOutOfCandidateLoad(t *testing
 		Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, Name: "routing projection", Email: "route@example.test",
 		SourceKey: "routing:projection", OIDCClientID: "client-id", EncryptedAccessToken: "access-secret",
 		EncryptedCloudflareCookie: "cookie-secret", ExpiresAt: now.Add(time.Hour), Enabled: true,
-		AuthStatus: account.AuthStatusActive, Priority: 9, MaxConcurrent: 3, MinimumRemaining: 1.5,
+		AuthStatus: account.AuthStatusActive, MaxConcurrent: 3, MinimumRemaining: 1.5,
 		WebTier: account.WebTierSuper,
 	})
 	if err != nil {
@@ -264,7 +264,7 @@ func TestGetCredentialMaterialHydratesOneAccountAndMapsNotFound(t *testing.T) {
 func assertRoutingProjection(t *testing.T, value, created account.Credential) {
 	t.Helper()
 	if value.ID != created.ID || value.Provider != created.Provider || value.Name != created.Name || value.SourceKey != created.SourceKey ||
-		value.Priority != created.Priority || value.MaxConcurrent != created.MaxConcurrent || value.MinimumRemaining != created.MinimumRemaining || value.WebTier != account.WebTierSuper ||
+		value.MaxConcurrent != created.MaxConcurrent || value.MinimumRemaining != created.MinimumRemaining || value.WebTier != account.WebTierSuper ||
 		value.AuthType != created.AuthType || value.OIDCClientID != created.OIDCClientID || !value.ExpiresAt.Equal(created.ExpiresAt) {
 		t.Fatalf("routing metadata = %#v", value)
 	}

@@ -619,6 +619,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			_ = s.mediaJobs.UpdateMediaJob(ctx, job)
 		}
 
+		lease.armWeight(route.UpstreamModel, 0)
 		lastProgress := job.Progress
 		result, err = adapter.GenerateVideo(ctx, provider.VideoRequest{
 			Credential: lease.Credential, Billing: lease.Billing, JobID: job.ID, Model: route.UpstreamModel,
@@ -643,11 +644,13 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			result, err = s.persistRemoteVideo(ctx, job.ID, adapter, lease.Credential, result)
 		}
 		if err == nil {
+			lease.recordWeight(ctx, route.UpstreamModel, 0, http.StatusOK, "")
 			break
 		}
 		lastErr = err
 		captureVideoAttempt(failureAttempts, lease.Credential, attemptStarted, err)
 		if parent.Err() != nil {
+			lease.recordWeight(ctx, route.UpstreamModel, 0, 499, "request_canceled")
 			s.deferVideoJob(parent, job)
 			return
 		}
@@ -728,6 +731,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			} else if hasStatus && status == http.StatusTooManyRequests {
 				failureCode = "rate_limited"
 			}
+			lease.recordWeight(ctx, route.UpstreamModel, 0, upstreamStatus, failureCode)
 			s.failVideoJob(parent, job, failureCode, publicErr, upstreamStatus, failureAttempts.snapshot())
 			return
 		}

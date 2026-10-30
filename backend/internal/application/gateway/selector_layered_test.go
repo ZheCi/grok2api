@@ -635,8 +635,8 @@ func TestSelectorFallsBackWhenLayerVersionsKeepChanging(t *testing.T) {
 func TestSelectorHydratesOnlyClaimedCredentialAndSkipsStaleCandidate(t *testing.T) {
 	repo := newLayeredRepositoryFixture()
 	repo.bases = []account.RoutingAccountBase{
-		{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 20}},
-		{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 10}},
+		{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive}},
+		{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive}},
 	}
 	repo.materialErrors = map[uint64]error{1: repository.ErrNotFound}
 	repo.materials = map[uint64]account.CredentialMaterial{
@@ -660,8 +660,8 @@ func TestSelectorHydratesOnlyClaimedCredentialAndSkipsStaleCandidate(t *testing.
 func TestSelectorSkipsCredentialMaterialLoadErrorAndUsesNextAccount(t *testing.T) {
 	repo := newLayeredRepositoryFixture()
 	repo.bases = []account.RoutingAccountBase{
-		{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 20}},
-		{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 10}},
+		{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive}},
+		{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive}},
 	}
 	repo.overlays["model-a"] = account.RoutingOverlaySnapshot{Values: []account.RoutingAccountOverlay{
 		{AccountID: 1, ModelCapabilityKnown: true, SupportsModel: true},
@@ -689,8 +689,8 @@ func TestSelectorSkipsCredentialMaterialLoadErrorAndUsesNextAccount(t *testing.T
 func TestSelectorCredentialMaterialContextCancelDoesNotDrainPool(t *testing.T) {
 	repo := newLayeredRepositoryFixture()
 	repo.bases = []account.RoutingAccountBase{
-		{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 20}},
-		{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 10}},
+		{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive}},
+		{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive}},
 	}
 	repo.overlays["model-a"] = account.RoutingOverlaySnapshot{Values: []account.RoutingAccountOverlay{
 		{AccountID: 1, ModelCapabilityKnown: true, SupportsModel: true},
@@ -759,8 +759,8 @@ func TestSelectorPinnedCredentialDoesNotSwitchWhenMaterialIsStale(t *testing.T) 
 func TestSelectorRebindsStickySessionAfterCredentialMaterialLoadError(t *testing.T) {
 	repo := newLayeredRepositoryFixture()
 	repo.bases = []account.RoutingAccountBase{
-		{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 20}},
-		{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 10}},
+		{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive}},
+		{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive}},
 	}
 	repo.overlays["model-a"] = account.RoutingOverlaySnapshot{Values: []account.RoutingAccountOverlay{
 		{AccountID: 1, ModelCapabilityKnown: true, SupportsModel: true},
@@ -794,8 +794,8 @@ func TestSelectorRebindsStickySessionAfterCredentialMaterialLoadError(t *testing
 func TestSelectorRebindsStickySessionAfterCredentialBecomesStale(t *testing.T) {
 	repo := newLayeredRepositoryFixture()
 	repo.bases = []account.RoutingAccountBase{
-		{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 20}},
-		{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 10}},
+		{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive}},
+		{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive}},
 	}
 	repo.materialErrors = map[uint64]error{1: repository.ErrNotFound}
 	sticky := memory.NewStickyStore()
@@ -822,8 +822,8 @@ func TestSelectorRebindsStickySessionAfterCredentialBecomesStale(t *testing.T) {
 func TestSelectorPropagatesPermanentCredentialMaterialLoadErrorAndReleasesCapacity(t *testing.T) {
 	repo := newLayeredRepositoryFixture()
 	repo.bases = []account.RoutingAccountBase{
-		{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 20}},
-		{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 10}},
+		{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive}},
+		{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive}},
 	}
 	repo.overlays["model-a"] = account.RoutingOverlaySnapshot{Values: []account.RoutingAccountOverlay{
 		{AccountID: 1, ModelCapabilityKnown: true, SupportsModel: true},
@@ -859,8 +859,7 @@ func TestSelectorStopsAfterRepeatedCredentialMaterialLoadFailures(t *testing.T) 
 	for index := 0; index < candidateCount; index++ {
 		accountID := uint64(index + 1)
 		repo.bases = append(repo.bases, account.RoutingAccountBase{Credential: account.Credential{
-			ID: accountID, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, Priority: candidateCount - index,
-		}})
+			ID: accountID, Provider: account.ProviderBuild, Enabled: true, AuthStatus: account.AuthStatusActive, }})
 		overlays = append(overlays, account.RoutingAccountOverlay{AccountID: accountID, ModelCapabilityKnown: true, SupportsModel: true})
 		repo.materialErrors[accountID] = temporaryRoutingLoadError{message: "credential store temporarily unavailable"}
 	}

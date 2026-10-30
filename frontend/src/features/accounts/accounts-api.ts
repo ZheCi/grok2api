@@ -96,9 +96,10 @@ export type AccountDTO = {
   lastRefreshErrorCode?: string;
   lastRefreshErrorMessage?: string;
   lastRefreshErrorResponse?: string;
-  priority: number;
   maxConcurrent: number;
   minimumRemaining: number;
+  weight: number;
+  weightManual: boolean;
   failureCount: number;
   cooldownUntil?: string;
   lastError?: string;
@@ -128,7 +129,6 @@ export type LinkedAccountDTO = {
 export type AccountUpdateInput = {
   name: string;
   enabled?: boolean;
-  priority: number;
   maxConcurrent: number;
   minimumRemaining: number;
   cloudflareCookies?: string;
@@ -195,7 +195,7 @@ const accountValidator = hasShape({
   enabled: isBoolean, authStatus: isOneOf("active", "reauthRequired"), expiresAt: isOptional(isString), refreshable: isBoolean, cloudflareCookieConfigured: isBoolean,
   buildSuperEntitled: isBoolean, buildRouteMode: isOneOf("auto", "build", "xai"), buildBotFlagged: isBoolean, buildBotFlagSource: isOptional(isNumber), modelSyncFailed: isOptional(isBoolean), refreshDueAt: isOptional(isString), lastRefreshAt: isOptional(isString), refreshFailureCount: isNumber,
   egressNodeId: isOptional(isString), egressAssignmentMode: isOptional(isOneOf("manual", "auto")),
-  lastRefreshErrorStatus: isOptional(isNumber), lastRefreshErrorCode: isOptional(isString), lastRefreshErrorMessage: isOptional(isString), lastRefreshErrorResponse: isOptional(isString), priority: isNumber, maxConcurrent: isNumber, minimumRemaining: isNumber,
+  lastRefreshErrorStatus: isOptional(isNumber), lastRefreshErrorCode: isOptional(isString), lastRefreshErrorMessage: isOptional(isString), lastRefreshErrorResponse: isOptional(isString), maxConcurrent: isNumber, minimumRemaining: isNumber, weight: isNumber, weightManual: isBoolean,
   failureCount: isNumber, cooldownUntil: isOptional(isString), lastError: isOptional(isString), lastUsedAt: isOptional(isString),
   enabledDoesNotClearCooldown: isOptional(isBoolean),
   linkedAccountId: isOptional(isString), linkedAccountName: isOptional(isString), linkedProvider: isOptional(isOneOf("grok_build", "grok_web")), linkedAccounts: isOptional(isArrayOf(linkedAccountValidator)),
@@ -340,6 +340,10 @@ export function refreshAccountToken(id: string): Promise<AccountDTO> {
 
 export function clearAccountCooldown(id: string): Promise<AccountDTO> {
   return apiRequest(`/api/admin/v1/accounts/${id}/clear-cooldown`, { method: "POST" }, decodeAccount);
+}
+
+export function setAccountWeight(id: string, weight: number | null): Promise<{ weight: number; weightManual: boolean }> {
+  return apiRequest(`/api/admin/v1/accounts/${id}/weight`, { method: "PATCH", body: { weight } }, createObjectDecoder("account weight", { weight: isNumber, weightManual: isBoolean }));
 }
 
 export function clearAccountsCooldown(ids: string[], provider: AccountProvider): Promise<{ cleared: number }> {

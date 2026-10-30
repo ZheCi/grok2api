@@ -94,14 +94,14 @@ func TestSelectorPrioritizesDueQuotaProbeOnce(t *testing.T) {
 	accounts := relational.NewAccountRepository(database)
 	probe, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "probe", SourceKey: "probe", EncryptedAccessToken: "encrypted", Enabled: true,
-		AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 1,
+		AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	active, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "active", SourceKey: "active", EncryptedAccessToken: "encrypted", Enabled: true,
-		AuthStatus: account.AuthStatusActive, Priority: 200, MaxConcurrent: 1,
+		AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -321,7 +321,7 @@ func BenchmarkSelectorCandidatePlanning(b *testing.B) {
 		candidates[index] = account.RoutingCandidate{
 			Credential: account.Credential{
 				ID: id, Provider: account.ProviderBuild, AuthStatus: account.AuthStatusActive,
-				Priority: index % 10, MaxConcurrent: account.DefaultMaxConcurrent,
+				MaxConcurrent: account.DefaultMaxConcurrent,
 			},
 			Billing: &billing, ModelCapabilityKnown: true, SupportsModel: true,
 		}
@@ -356,7 +356,7 @@ func TestSelectorSkipsQuotaProbeBeforeDue(t *testing.T) {
 	accounts := relational.NewAccountRepository(database)
 	value, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "waiting", SourceKey: "waiting", EncryptedAccessToken: "encrypted", Enabled: true,
-		AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 1,
+		AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -469,14 +469,14 @@ func TestSelectorModelQuotaPreservesSessionAffinity(t *testing.T) {
 	accounts := relational.NewAccountRepository(database)
 	credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "build", SourceKey: "build", EncryptedAccessToken: "encrypted",
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	fallback, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "fallback", SourceKey: "fallback", EncryptedAccessToken: "encrypted-fallback",
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 50, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -632,14 +632,14 @@ func TestSelectorOnlyUsesAccountsSupportingRequestedModel(t *testing.T) {
 	models := relational.NewModelRepository(database)
 	unsupported, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "basic", SourceKey: "basic", EncryptedAccessToken: "encrypted", AuthStatus: account.AuthStatusActive,
-		Priority: 500, MaxConcurrent: 1,
+		MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	supported, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "premium", SourceKey: "premium", EncryptedAccessToken: "encrypted", AuthStatus: account.AuthStatusActive,
-		Priority: 100, MaxConcurrent: 1,
+		MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -722,11 +722,11 @@ func TestSelectorUsesTierSpecificWebImageEditQuotaAndPrefersBasic(t *testing.T) 
 	}
 	accounts := relational.NewAccountRepository(database)
 	models := relational.NewModelRepository(database)
-	create := func(name string, tier account.WebTier, priority int) account.Credential {
+	create := func(name string, tier account.WebTier, _ int) account.Credential {
 		value, _, createErr := accounts.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: tier,
 			Name: name, SourceKey: name, EncryptedAccessToken: "encrypted",
-			AuthStatus: account.AuthStatusActive, Priority: priority, MaxConcurrent: 1,
+			AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -858,11 +858,11 @@ func TestSelectorHonorsWebTierPoolOrderBeforeAccountPriority(t *testing.T) {
 		t.Fatal(err)
 	}
 	accounts := relational.NewAccountRepository(database)
-	for index, tier := range []account.WebTier{account.WebTierBasic, account.WebTierSuper, account.WebTierHeavy} {
+	for _, tier := range []account.WebTier{account.WebTierBasic, account.WebTierSuper, account.WebTierHeavy} {
 		if _, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: tier,
 			Name: string(tier), SourceKey: string(tier), EncryptedAccessToken: "encrypted",
-			AuthStatus: account.AuthStatusActive, Priority: 300 - index*100, MaxConcurrent: 1,
+			AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -898,9 +898,9 @@ func TestSelectorEnforcesClientKeyAccountScopeAcrossProvidersAndTiers(t *testing
 		}
 		return created
 	}
-	buildFree := create(account.Credential{Provider: account.ProviderBuild, Name: "build-free", SourceKey: "build-free", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 2})
-	buildSuper := create(account.Credential{Provider: account.ProviderBuild, Name: "build-super", SourceKey: "build-super", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 20, MaxConcurrent: 2})
-	buildUnknown := create(account.Credential{Provider: account.ProviderBuild, Name: "build-unknown", SourceKey: "build-unknown", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 2})
+	buildFree := create(account.Credential{Provider: account.ProviderBuild, Name: "build-free", SourceKey: "build-free", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 2})
+	buildSuper := create(account.Credential{Provider: account.ProviderBuild, Name: "build-super", SourceKey: "build-super", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 2})
+	buildUnknown := create(account.Credential{Provider: account.ProviderBuild, Name: "build-unknown", SourceKey: "build-unknown", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 2})
 	now := time.Now().UTC()
 	if err := accounts.SaveBilling(ctx, account.Billing{AccountID: buildFree.ID, PlanName: "Free", SyncedAt: now}); err != nil {
 		t.Fatal(err)
@@ -909,11 +909,11 @@ func TestSelectorEnforcesClientKeyAccountScopeAcrossProvidersAndTiers(t *testing
 		t.Fatal(err)
 	}
 
-	webFree := create(account.Credential{Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierBasic, Name: "web-free", SourceKey: "web-free", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 2})
-	webSuper := create(account.Credential{Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierSuper, Name: "web-super", SourceKey: "web-super", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 20, MaxConcurrent: 2})
-	webHeavy := create(account.Credential{Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierHeavy, Name: "web-heavy", SourceKey: "web-heavy", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 2})
-	_ = create(account.Credential{Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierAuto, Name: "web-unknown", SourceKey: "web-unknown", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 200, MaxConcurrent: 2})
-	console := create(account.Credential{Provider: account.ProviderConsole, AuthType: account.AuthTypeSSO, Name: "console", SourceKey: "console", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 2})
+	webFree := create(account.Credential{Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierBasic, Name: "web-free", SourceKey: "web-free", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 2})
+	webSuper := create(account.Credential{Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierSuper, Name: "web-super", SourceKey: "web-super", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 2})
+	webHeavy := create(account.Credential{Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierHeavy, Name: "web-heavy", SourceKey: "web-heavy", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 2})
+	_ = create(account.Credential{Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierAuto, Name: "web-unknown", SourceKey: "web-unknown", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 2})
+	console := create(account.Credential{Provider: account.ProviderConsole, AuthType: account.AuthTypeSSO, Name: "console", SourceKey: "console", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 2})
 
 	selector := NewSelector(accounts, memory.NewConcurrencyLimiter(), memory.NewStickyStore(), staticTierOrder{order: []account.WebTier{account.WebTierBasic, account.WebTierSuper, account.WebTierHeavy}}, time.Hour, time.Second, time.Minute)
 	providerScope := func(provider account.Provider) clientkeydomain.ProviderScope {
@@ -1007,8 +1007,8 @@ func TestSelectorUsesBatchConcurrencySnapshot(t *testing.T) {
 	limiter := &batchConcurrencyLimiter{values: map[string]int{"account:1": 2, "account:2": 1}}
 	selector := NewSelector(nil, limiter, nil, nil, time.Hour, time.Second, time.Minute)
 	values := []account.RoutingCandidate{
-		{Credential: account.Credential{ID: 1, Priority: 1}},
-		{Credential: account.Credential{ID: 2, Priority: 1}},
+		{Credential: account.Credential{ID: 1}},
+		{Credential: account.Credential{ID: 2}},
 	}
 	plan, err := selector.planCandidates(context.Background(), values, time.Now().UTC(), nil)
 	if err != nil {
@@ -1037,8 +1037,8 @@ func TestCandidatePlanExcludesSaturatedAccounts(t *testing.T) {
 	limiter := &batchConcurrencyLimiter{values: map[string]int{"account:1": 1, "account:2": 0}}
 	selector := &Selector{concurrency: limiter, lastSelectedAt: make(map[uint64]time.Time)}
 	values := []account.RoutingCandidate{
-		{Credential: account.Credential{ID: 1, Priority: 100, MaxConcurrent: 1}},
-		{Credential: account.Credential{ID: 2, Priority: 1, MaxConcurrent: 1}},
+		{Credential: account.Credential{ID: 1, MaxConcurrent: 1}},
+		{Credential: account.Credential{ID: 2, MaxConcurrent: 1}},
 	}
 	plan, err := selector.planCandidates(context.Background(), values, time.Now().UTC(), nil)
 	if err != nil {
@@ -1066,14 +1066,14 @@ func TestSelectionSessionReusesCandidatePlanAcrossAccountSwitches(t *testing.T) 
 	accounts := relational.NewAccountRepository(database)
 	first, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "first", SourceKey: "first", EncryptedAccessToken: "encrypted",
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 20, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "second", SourceKey: "second", EncryptedAccessToken: "encrypted",
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1134,14 +1134,14 @@ func TestSelectorPreferFreeBuildHotReloadAndSaturationFallback(t *testing.T) {
 	accounts := relational.NewAccountRepository(database)
 	freeAccount, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "free", SourceKey: "free", EncryptedAccessToken: "encrypted",
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 1, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	superAccount, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "super", SourceKey: "super", EncryptedAccessToken: "encrypted",
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1196,10 +1196,11 @@ func TestSelectorPreferFreeBuildHotReloadAndSaturationFallback(t *testing.T) {
 func TestCandidatePlanPreservesSelectorOrdering(t *testing.T) {
 	now := time.Now().UTC()
 	limiter := &batchConcurrencyLimiter{values: map[string]int{"account:2": 1}}
-	selector := &Selector{concurrency: limiter, lastSelectedAt: map[uint64]time.Time{6: now}}
+	selector := &Selector{concurrency: limiter, lastSelectedAt: map[uint64]time.Time{6: now}, weightOverrides: map[uint64]int{}}
 	newCandidate := func(id uint64, tier account.WebTier, priority int, known, supported bool) account.RoutingCandidate {
+		selector.weightOverrides[id] = priority
 		return account.RoutingCandidate{
-			Credential: account.Credential{ID: id, WebTier: tier, Priority: priority},
+			Credential: account.Credential{ID: id, WebTier: tier},
 			Billing: &account.Billing{
 				AccountID: id, MonthlyLimit: 100, SyncedAt: now,
 			},
@@ -1229,8 +1230,8 @@ func TestCandidatePlanPreservesSelectorOrdering(t *testing.T) {
 
 func TestCandidatePlanPrefersKnownRemainingQuota(t *testing.T) {
 	values := []account.RoutingCandidate{
-		{Credential: account.Credential{ID: 1, Priority: 100}},
-		{Credential: account.Credential{ID: 2, Priority: 1}, QuotaWindow: &account.QuotaWindow{AccountID: 2, Mode: "console_image", Remaining: 2, Total: 5}},
+		{Credential: account.Credential{ID: 1}},
+		{Credential: account.Credential{ID: 2}, QuotaWindow: &account.QuotaWindow{AccountID: 2, Mode: "console_image", Remaining: 2, Total: 5}},
 	}
 	scores := []candidateScore{{index: 0}, {index: 1, quotaKnown: true, quotaAvailable: true}}
 	if !candidateScoreBetter(values, scores[1], scores[0]) {
@@ -1242,8 +1243,8 @@ func TestCandidatePlanDoesNotTreatEstimatedQuotaAsAuthoritative(t *testing.T) {
 	now := time.Now().UTC()
 	selector := NewSelector(nil, memory.NewConcurrencyLimiter(), nil, nil, time.Hour, time.Second, time.Minute)
 	values := []account.RoutingCandidate{
-		{Credential: account.Credential{ID: 1, Priority: 100}, QuotaWindow: &account.QuotaWindow{AccountID: 1, Mode: "console_image", Remaining: 5, Total: 5, Source: account.QuotaSourceEstimated}},
-		{Credential: account.Credential{ID: 2, Priority: 1}, QuotaWindow: &account.QuotaWindow{AccountID: 2, Mode: "console_image", Remaining: 1, Total: 5, Source: account.QuotaSourceUpstream}},
+		{Credential: account.Credential{ID: 1}, QuotaWindow: &account.QuotaWindow{AccountID: 1, Mode: "console_image", Remaining: 5, Total: 5, Source: account.QuotaSourceEstimated}},
+		{Credential: account.Credential{ID: 2}, QuotaWindow: &account.QuotaWindow{AccountID: 2, Mode: "console_image", Remaining: 1, Total: 5, Source: account.QuotaSourceUpstream}},
 	}
 	plan, err := selector.planCandidates(context.Background(), values, now, nil)
 	if err != nil {
@@ -1259,8 +1260,8 @@ func TestCandidatePlanDoesNotTreatLegacyDefaultQuotaAsAuthoritative(t *testing.T
 	now := time.Now().UTC()
 	selector := NewSelector(nil, memory.NewConcurrencyLimiter(), nil, nil, time.Hour, time.Second, time.Minute)
 	values := []account.RoutingCandidate{
-		{Credential: account.Credential{ID: 1, Priority: 100}, QuotaWindow: &account.QuotaWindow{AccountID: 1, Mode: "console_image", Remaining: 5, Total: 5, Source: account.QuotaSourceDefault}},
-		{Credential: account.Credential{ID: 2, Priority: 1}, QuotaWindow: &account.QuotaWindow{AccountID: 2, Mode: "console_image", Remaining: 1, Total: 5, Source: account.QuotaSourceUpstream}},
+		{Credential: account.Credential{ID: 1}, QuotaWindow: &account.QuotaWindow{AccountID: 1, Mode: "console_image", Remaining: 5, Total: 5, Source: account.QuotaSourceDefault}},
+		{Credential: account.Credential{ID: 2}, QuotaWindow: &account.QuotaWindow{AccountID: 2, Mode: "console_image", Remaining: 1, Total: 5, Source: account.QuotaSourceUpstream}},
 	}
 	plan, err := selector.planCandidates(context.Background(), values, now, nil)
 	if err != nil {
@@ -1507,7 +1508,7 @@ func newStickySelectorFixture(t *testing.T, sticky repository.StickySessionRepos
 	accounts := relational.NewAccountRepository(database)
 	primary, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "primary", SourceKey: "primary", EncryptedAccessToken: "encrypted",
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1516,7 +1517,7 @@ func newStickySelectorFixture(t *testing.T, sticky repository.StickySessionRepos
 	if withFallback {
 		fallback, _, err = accounts.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: "fallback", SourceKey: "fallback", EncryptedAccessToken: "encrypted",
-			Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 1, MaxConcurrent: 1,
+			Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -1604,7 +1605,7 @@ func TestMarkMissingThinkingCoolsThenDisables(t *testing.T) {
 	accounts := relational.NewAccountRepository(database)
 	credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "no-think", SourceKey: "no-think", EncryptedAccessToken: "encrypted", Enabled: true,
-		AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 1,
+		AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1652,7 +1653,7 @@ func TestMarkMissingThinkingCoolsThenDisables(t *testing.T) {
 
 	ok, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "recovered", SourceKey: "recovered", EncryptedAccessToken: "encrypted", Enabled: true,
-		AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 1,
+		AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1675,7 +1676,7 @@ func TestMarkMissingThinkingCoolsThenDisables(t *testing.T) {
 
 	immediate, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "auto-disable", SourceKey: "auto-disable", EncryptedAccessToken: "encrypted", Enabled: true,
-		AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 1,
+		AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1705,7 +1706,7 @@ func TestMarkMissingThinkingWaitsForConfiguredStreak(t *testing.T) {
 	accounts := relational.NewAccountRepository(database)
 	credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "streak", SourceKey: "streak", EncryptedAccessToken: "encrypted", Enabled: true,
-		AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 1,
+		AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1770,7 +1771,7 @@ func TestMarkFailureSoftNetworkCooldown(t *testing.T) {
 	accounts := relational.NewAccountRepository(database)
 	credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "soft", SourceKey: "soft", EncryptedAccessToken: "encrypted", Enabled: true,
-		AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 1,
+		AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1917,7 +1918,7 @@ func TestMarkFailureBoundsUpstreamRetryAfter(t *testing.T) {
 	accounts := relational.NewAccountRepository(database)
 	credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "retry-after-bound", SourceKey: "retry-after-bound", EncryptedAccessToken: "encrypted", Enabled: true,
-		AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 1,
+		AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1951,7 +1952,7 @@ func TestMarkSoftFailureBoundsUpstreamRetryAfter(t *testing.T) {
 	accounts := relational.NewAccountRepository(database)
 	credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "soft-retry-after-bound", SourceKey: "soft-retry-after-bound", EncryptedAccessToken: "encrypted", Enabled: true,
-		AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 1,
+		AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1987,7 +1988,7 @@ func TestMarkFailureAfterSuccessPreservesExplicitCooldown(t *testing.T) {
 	accounts := relational.NewAccountRepository(database)
 	credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "after-success-cooldown", SourceKey: "after-success-cooldown", EncryptedAccessToken: "encrypted", Enabled: true,
-		AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 1,
+		AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

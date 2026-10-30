@@ -21,7 +21,7 @@ type candidateScore struct {
 	billingFresh      bool
 	inFlight          int
 	remaining         float64
-	lastSelected      time.Time
+	weight            int
 }
 
 // candidatePlan 使用线性建堆保留完整路由优先级，并允许 claim 失败后按顺序取下一账号。
@@ -91,8 +91,8 @@ func candidateScoreBetter(values []account.RoutingCandidate, leftScore, rightSco
 	if leftScore.tier != rightScore.tier {
 		return leftScore.tier < rightScore.tier
 	}
-	if left.Priority != right.Priority {
-		return left.Priority > right.Priority
+	if leftScore.weight != rightScore.weight {
+		return leftScore.weight > rightScore.weight
 	}
 	if leftScore.billingFresh != rightScore.billingFresh {
 		return leftScore.billingFresh
@@ -102,9 +102,6 @@ func candidateScoreBetter(values []account.RoutingCandidate, leftScore, rightSco
 	}
 	if leftScore.remaining != rightScore.remaining {
 		return leftScore.remaining > rightScore.remaining
-	}
-	if !leftScore.lastSelected.Equal(rightScore.lastSelected) {
-		return leftScore.lastSelected.Before(rightScore.lastSelected)
 	}
 	return left.ID < right.ID
 }
@@ -191,11 +188,13 @@ func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []a
 		if inFlight[position] >= limit {
 			continue
 		}
+		hint := weightHintFrom(ctx)
 		score := candidateScore{
 			index: index, tier: tierOrderRank(tierOrder, candidate.Credential.WebTier),
 			webCatalogSupport: candidate.Credential.Provider == account.ProviderWeb && len(tierOrder) > 0 && webTierInOrder(tierOrder, candidate.Credential.WebTier),
 			preferFreeBuild:   preferFreeBuild && candidate.IsKnownFreeBuild(),
-			inFlight:          inFlight[position], lastSelected: s.lastSelectedAt[candidate.Credential.ID],
+			inFlight:          inFlight[position],
+			weight:            s.accountWeight(candidate.Credential, now, hint.model, hint.tokens, s.lastSelectedAt[candidate.Credential.ID]),
 		}
 		// 只有真实上游快照能够证明账号具备该模式额度。历史默认值和
 		// 本地预测值都属于未知能力，只保留为路由兜底。

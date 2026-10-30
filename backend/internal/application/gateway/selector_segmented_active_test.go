@@ -34,10 +34,9 @@ func TestSegmentedCandidateCohortsRetainOnlyBoundedRotatingWindows(t *testing.T)
 	values := make([]account.RoutingCandidate, candidateCount)
 	for index := range values {
 		values[index] = account.RoutingCandidate{Credential: account.Credential{
-			ID: uint64(index + 1), Provider: account.ProviderBuild, Priority: account.DefaultPriority,
-		}}
+			ID: uint64(index + 1), Provider: account.ProviderBuild, }}
 	}
-	buckets := segmentedCandidateCohorts(values, nil, time.Now().UTC(), nil, false, 9980, 64, segmentedWindowsBeforeFullFallback)
+	buckets := segmentedCandidateCohorts(values, nil, time.Now().UTC(), nil, false, 9980, 64, segmentedWindowsBeforeFullFallback, nil)
 	if len(buckets) != 1 || len(buckets[0].indexes) != 256 {
 		t.Fatalf("bounded cohorts = %#v", buckets)
 	}
@@ -230,7 +229,7 @@ func TestSegmentedActiveCohortOrderingMatchesFullPlannerHardOrder(t *testing.T) 
 									cohorts = append(cohorts, segmentedSelectorCohort{
 										supportsModel: supportsModel, capabilityKnown: capabilityKnown,
 										quotaKnown: quotaKnown, quotaAvailable: quotaAvailable,
-										preferFreeBuild: preferFreeBuild, tier: tier, priority: priority,
+										preferFreeBuild: preferFreeBuild, tier: tier, weight: priority,
 										billingFresh: billingFresh,
 									})
 								}
@@ -247,12 +246,12 @@ func TestSegmentedActiveCohortOrderingMatchesFullPlannerHardOrder(t *testing.T) 
 				continue
 			}
 			values := []account.RoutingCandidate{
-				{Credential: account.Credential{ID: 1, Priority: left.priority}, SupportsModel: left.supportsModel, ModelCapabilityKnown: left.capabilityKnown},
-				{Credential: account.Credential{ID: 2, Priority: right.priority}, SupportsModel: right.supportsModel, ModelCapabilityKnown: right.capabilityKnown},
+				{Credential: account.Credential{ID: 1}, SupportsModel: left.supportsModel, ModelCapabilityKnown: left.capabilityKnown},
+				{Credential: account.Credential{ID: 2}, SupportsModel: right.supportsModel, ModelCapabilityKnown: right.capabilityKnown},
 			}
 			scores := []candidateScore{
-				{index: 0, tier: left.tier, quotaKnown: left.quotaKnown, quotaAvailable: left.quotaAvailable, preferFreeBuild: left.preferFreeBuild, billingFresh: left.billingFresh},
-				{index: 1, tier: right.tier, quotaKnown: right.quotaKnown, quotaAvailable: right.quotaAvailable, preferFreeBuild: right.preferFreeBuild, billingFresh: right.billingFresh},
+				{index: 0, tier: left.tier, weight: left.weight, quotaKnown: left.quotaKnown, quotaAvailable: left.quotaAvailable, preferFreeBuild: left.preferFreeBuild, billingFresh: left.billingFresh},
+				{index: 1, tier: right.tier, weight: right.weight, quotaKnown: right.quotaKnown, quotaAvailable: right.quotaAvailable, preferFreeBuild: right.preferFreeBuild, billingFresh: right.billingFresh},
 			}
 			if got, want := segmentedSelectorCohortBetter(left, right), candidateScoreBetter(values, scores[0], scores[1]); got != want {
 				t.Fatalf("cohort order mismatch at %d/%d: got %t want %t", leftIndex, rightIndex, got, want)
@@ -276,7 +275,7 @@ func TestSegmentedCohortsUseEffectiveWebCatalogCapability(t *testing.T) {
 	}
 	cohorts := segmentedCandidateCohorts(values, nil, time.Now().UTC(), []account.WebTier{
 		account.WebTierBasic, account.WebTierSuper, account.WebTierHeavy,
-	}, false, 0, 1, 2)
+	}, false, 0, 1, 2, nil)
 	if len(cohorts) != 2 || len(cohorts[0].indexes) != 1 || cohorts[0].indexes[0] != 0 {
 		t.Fatalf("segmented Web cohorts = %#v, want Basic account first", cohorts)
 	}
@@ -286,11 +285,11 @@ func TestSegmentedPlannerUsesOnePreferFreeBuildSnapshot(t *testing.T) {
 	now := time.Now().UTC()
 	values := []account.RoutingCandidate{
 		{
-			Credential: account.Credential{ID: 1, Provider: account.ProviderBuild, Priority: 100},
+			Credential: account.Credential{ID: 1, Provider: account.ProviderBuild},
 			Billing:    &account.Billing{PlanName: "SuperGrok", SyncedAt: now},
 		},
 		{
-			Credential: account.Credential{ID: 2, Provider: account.ProviderBuild, Priority: 1},
+			Credential: account.Credential{ID: 2, Provider: account.ProviderBuild},
 			Billing:    &account.Billing{PlanName: "Free", SyncedAt: now},
 		},
 	}
@@ -574,19 +573,23 @@ func newSegmentedActiveTestSelector(count int, limiter repository.ConcurrencyLim
 
 func newSegmentedActiveTestSelectorWithWait(count int, limiter repository.ConcurrencyLimiter, priorities map[uint64]int, capacityWait time.Duration) *Selector {
 	bases := make([]account.RoutingAccountBase, count)
+	weights := make(map[uint64]int, count)
 	for index := range bases {
 		id := uint64(index + 1)
-		priority := 10
+		weight := 10
 		if value, ok := priorities[id]; ok {
-			priority = value
+			weight = value
 		}
+		weights[id] = weight
 		bases[index] = account.RoutingAccountBase{Credential: account.Credential{
 			ID: id, Provider: account.ProviderBuild, AuthStatus: account.AuthStatusActive,
-			Enabled: true, Priority: priority, MaxConcurrent: account.DefaultMaxConcurrent,
+			Enabled: true, MaxConcurrent: account.DefaultMaxConcurrent,
 		}}
 	}
 	repository := &layeredAccountRepository{bases: bases, overlays: map[string]account.RoutingOverlaySnapshot{"model": {}}}
-	return NewSelector(repository, limiter, memory.NewStickyStore(), nil, time.Hour, time.Second, time.Minute, capacityWait)
+	selector := NewSelector(repository, limiter, memory.NewStickyStore(), nil, time.Hour, time.Second, time.Minute, capacityWait)
+	selector.weightOverrides = weights
+	return selector
 }
 
 func activeSegmentedCursorCount(selector *Selector) uint64 {

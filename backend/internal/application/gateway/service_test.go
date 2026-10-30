@@ -171,11 +171,11 @@ func TestGatewayFailsOverBeforeReturningBody(t *testing.T) {
 	auditRepo := relational.NewAuditRepository(database)
 	responseRepo := relational.NewResponseRepository(database)
 	keyRepo := relational.NewClientKeyRepository(database)
-	first, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{Provider: account.ProviderBuild, Name: "first", SourceKey: "first", EncryptedAccessToken: "one", ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 200, MaxConcurrent: 1})
+	first, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{Provider: account.ProviderBuild, Name: "first", SourceKey: "first", EncryptedAccessToken: "one", ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{Provider: account.ProviderBuild, Name: "second", SourceKey: "second", EncryptedAccessToken: "two", ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 1})
+	second, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{Provider: account.ProviderBuild, Name: "second", SourceKey: "second", EncryptedAccessToken: "two", ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,11 +552,11 @@ func TestGatewayBuildResponseHeaderTimeoutDoesNotSwitchAccounts(t *testing.T) {
 	auditRepo := relational.NewAuditRepository(database)
 	responseRepo := relational.NewResponseRepository(database)
 	credentials := make([]account.Credential, 0, 2)
-	for index, name := range []string{"timeout", "fallback"} {
+	for _, name := range []string{"timeout", "fallback"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: "encrypted-" + name,
 			ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
-			Priority: 200 - index*100, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -613,11 +613,11 @@ func TestGatewayNonStreamingEmptyIdleCoolsAccountAndSwitches(t *testing.T) {
 	responseRepo := relational.NewResponseRepository(database)
 	keyRepo := relational.NewClientKeyRepository(database)
 	credentials := make([]account.Credential, 0, 2)
-	for index, name := range []string{"empty-idle", "healthy"} {
+	for _, name := range []string{"empty-idle", "healthy"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: "encrypted-" + name,
 			ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
-			Priority: 200 - index*100, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -784,7 +784,7 @@ func TestGatewayUnlimitedAttemptsExhaustsEligiblePool(t *testing.T) {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: "encrypted-" + name,
 			ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
-			Priority: 500 - index*100, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -948,11 +948,11 @@ func testGatewaySSOFailureMarksInvalidAndSwitchesAccount(t *testing.T, providerV
 	responseRepo := relational.NewResponseRepository(database)
 	keyRepo := relational.NewClientKeyRepository(database)
 	credentials := make([]account.Credential, 0, 2)
-	for index, name := range []string{"rejected", "healthy"} {
+	for _, name := range []string{"rejected", "healthy"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: providerValue, AuthType: account.AuthTypeSSO, Name: name, SourceKey: string(providerValue) + "-" + name,
 			EncryptedAccessToken: "encrypted-" + name, Enabled: true, AuthStatus: account.AuthStatusActive,
-			Priority: 200 - index*100, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -1033,14 +1033,14 @@ func TestGatewayTeamModelRateLimitOnlySkipsMatchingTeam(t *testing.T) {
 	responseRepo := relational.NewResponseRepository(database)
 	keyRepo := relational.NewClientKeyRepository(database)
 	credentials := make([]account.Credential, 0, 3)
-	for index, seed := range []struct {
+	for _, seed := range []struct {
 		name   string
 		teamID string
 	}{{"console-team-a-first", "team-a"}, {"console-team-a-second", "team-a"}, {"console-team-b", "team-b"}} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderConsole, AuthType: account.AuthTypeSSO, Name: seed.name, SourceKey: seed.name, TeamID: seed.teamID,
 			EncryptedAccessToken: "encrypted-" + seed.name, Enabled: true, AuthStatus: account.AuthStatusActive,
-			Priority: 200 - index, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -1070,6 +1070,7 @@ func TestGatewayTeamModelRateLimitOnlySkipsMatchingTeam(t *testing.T) {
 	sticky := memory.NewStickyStore()
 	accountService := accountapp.NewService(accountRepo, auditRepo, memory.NewDeviceSessionStore(), sticky, registry, testCipher(t), nil)
 	selector := NewSelector(accountRepo, memory.NewConcurrencyLimiter(), sticky, registry, time.Hour, time.Second, time.Minute)
+	selector.weightOverrides = map[uint64]int{credentials[0].ID: 200, credentials[1].ID: 100, credentials[2].ID: 0}
 	service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(nil, nil, nil, 60, 4, nil), registry, selector, responseRepo, 3)
 
 	assertSuccess := func(requestID, publicModel string) {
@@ -1985,11 +1986,11 @@ func TestGatewayUnknownBuildForbiddenTraversesAllAccountsWithoutCooldown(t *test
 	responseRepo := relational.NewResponseRepository(database)
 	keyRepo := relational.NewClientKeyRepository(database)
 	credentials := make([]account.Credential, 0, 3)
-	for index, name := range []string{"first", "second", "third"} {
+	for _, name := range []string{"first", "second", "third"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: name,
 			ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
-			Priority: 300 - index, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -2067,7 +2068,7 @@ func TestGatewayRefreshesAndRetriesBuildUnauthorizedOnce(t *testing.T) {
 	credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "rescue", SourceKey: "rescue",
 		EncryptedAccessToken: "access-old", EncryptedRefreshToken: "refresh-old", ExpiresAt: time.Now().Add(time.Hour),
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2155,7 +2156,7 @@ func TestBuildChatPermissionDenialDoesNotInvalidateVideoCredential(t *testing.T)
 	credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "chat-denied-video-valid", SourceKey: "chat-denied-video-valid",
 		EncryptedAccessToken: "access-old", EncryptedRefreshToken: "refresh-old", ExpiresAt: time.Now().Add(time.Hour),
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2256,7 +2257,7 @@ func TestBuildChatPermissionDenialMarksReauthWhenEnabled(t *testing.T) {
 	credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "chat-denied-reauth", SourceKey: "chat-denied-reauth",
 		EncryptedAccessToken: "access-old", EncryptedRefreshToken: "refresh-old", ExpiresAt: time.Now().Add(time.Hour),
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2323,7 +2324,7 @@ func TestSpendingLimitBlockedMarksQuotaRecovery(t *testing.T) {
 	credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "spending-limit", SourceKey: "spending-limit",
 		EncryptedAccessToken: "access-old", EncryptedRefreshToken: "refresh-old", ExpiresAt: time.Now().Add(time.Hour),
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2674,11 +2675,11 @@ func TestWebImageUnauthorizedMarksInvalidAndSwitchesAccount(t *testing.T) {
 	responseRepo := relational.NewResponseRepository(database)
 	keyRepo := relational.NewClientKeyRepository(database)
 	credentials := make([]account.Credential, 0, 2)
-	for index, name := range []string{"rejected-image", "healthy-image"} {
+	for _, name := range []string{"rejected-image", "healthy-image"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierSuper,
 			Name: name, SourceKey: name, EncryptedAccessToken: "encrypted-" + name,
-			Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 200 - index*100, MaxConcurrent: 1,
+			Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -2995,11 +2996,11 @@ func TestGatewaySafetyRejectionDoesNotTouchAccountState(t *testing.T) {
 	keyRepo := relational.NewClientKeyRepository(database)
 
 	credentials := make([]account.Credential, 0, 2)
-	for index, name := range []string{"safety-a", "safety-b"} {
+	for _, name := range []string{"safety-a", "safety-b"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: name,
 			EncryptedRefreshToken: "refresh-" + name, ExpiresAt: time.Now().Add(time.Hour),
-			Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 200 - index, MaxConcurrent: 1,
+			Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -3092,11 +3093,11 @@ func TestGatewayConsoleDPoPRequirementStopsAfterOneAccount(t *testing.T) {
 	responseRepo := relational.NewResponseRepository(database)
 
 	credentials := make([]account.Credential, 0, 2)
-	for index, name := range []string{"console-dpop-a", "console-dpop-b"} {
+	for _, name := range []string{"console-dpop-a", "console-dpop-b"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderConsole, AuthType: account.AuthTypeSSO,
 			Name: name, SourceKey: name, EncryptedAccessToken: name,
-			Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 200 - index, MaxConcurrent: 1,
+			Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -3167,11 +3168,11 @@ func TestGatewayFreeUsageExhaustionFailsOverToAnotherAccount(t *testing.T) {
 	keyRepo := relational.NewClientKeyRepository(database)
 
 	credentials := make([]account.Credential, 0, 2)
-	for index, name := range []string{"free-a", "free-b"} {
+	for _, name := range []string{"free-a", "free-b"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: name,
 			ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
-			Priority: 200 - index, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -3270,14 +3271,14 @@ func TestGatewayBuildTeamRPSRateLimitSwitchesTeam(t *testing.T) {
 	credentials := make([]account.Credential, 0, 3)
 	// A has stale credential metadata but reports Team X in the 429 body. B also
 	// uses Team X and C uses Team Y. Both A and B must be skipped after the limit.
-	for index, seed := range []struct {
+	for _, seed := range []struct {
 		name   string
 		teamID string
 	}{{"build-team-x-a", staleTeam}, {"build-team-x-b", teamX}, {"build-team-y-c", teamY}} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: seed.name, SourceKey: seed.name, TeamID: seed.teamID,
 			EncryptedAccessToken: "token-" + seed.name, ExpiresAt: time.Now().Add(time.Hour),
-			Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 300 - index, MaxConcurrent: 1,
+			Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -3445,11 +3446,11 @@ func TestGatewayGeneric429CoolsAccountAndRotates(t *testing.T) {
 	keyRepo := relational.NewClientKeyRepository(database)
 
 	credentials := make([]account.Credential, 0, 2)
-	for index, name := range []string{"fast-a", "fast-b"} {
+	for _, name := range []string{"fast-a", "fast-b"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: name,
 			ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
-			Priority: 200 - index, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -3522,11 +3523,11 @@ func TestGatewayNonAccount5xxSoftCoolsAndRotates(t *testing.T) {
 	keyRepo := relational.NewClientKeyRepository(database)
 
 	credentials := make([]account.Credential, 0, 2)
-	for index, name := range []string{"gateway-a", "gateway-b"} {
+	for _, name := range []string{"gateway-a", "gateway-b"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: name,
 			ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
-			Priority: 200 - index, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -3607,11 +3608,11 @@ func TestGatewayExhausted429PreservesLastBodyInFailure(t *testing.T) {
 	keyRepo := relational.NewClientKeyRepository(database)
 
 	credentials := make([]account.Credential, 0, 2)
-	for index, name := range []string{"body-a", "body-b"} {
+	for _, name := range []string{"body-a", "body-b"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: name,
 			ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
-			Priority: 200 - index, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -3706,7 +3707,7 @@ func TestGatewayExplicitPolicyRejectionDoesNotPenalizeOrRotateAccount(t *testing
 	credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "bare", SourceKey: "bare", EncryptedAccessToken: "access",
 		EncryptedRefreshToken: "refresh", ExpiresAt: time.Now().Add(time.Hour),
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -3792,11 +3793,11 @@ func TestGatewayUnknownBuildForbiddenRotatesWithoutPenalizingAccount(t *testing.
 	keyRepo := relational.NewClientKeyRepository(database)
 
 	credentials := make([]account.Credential, 0, 2)
-	for index, name := range []string{"unknown-a", "unknown-b"} {
+	for _, name := range []string{"unknown-a", "unknown-b"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: name,
 			EncryptedRefreshToken: "refresh-" + name, ExpiresAt: time.Now().Add(time.Hour),
-			Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 200 - index, MaxConcurrent: 1,
+			Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -3895,7 +3896,7 @@ func TestGatewayBarePermissionDeniedRetainsEgressRetryForWebAndConsole(t *testin
 			credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
 				Provider: providerValue, AuthType: account.AuthTypeSSO, Name: "egress", SourceKey: model,
 				EncryptedAccessToken: "access", ExpiresAt: time.Now().Add(time.Hour), WebTier: account.WebTierSuper,
-				Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 1,
+				Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -3964,11 +3965,11 @@ func TestGatewayPreviousResponseIDDoesNotCrossAccounts(t *testing.T) {
 	keyRepo := relational.NewClientKeyRepository(database)
 
 	credentials := make([]account.Credential, 0, 2)
-	for index, name := range []string{"pin-a", "pin-b"} {
+	for _, name := range []string{"pin-a", "pin-b"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: name,
 			ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
-			Priority: 200 - index, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -4047,7 +4048,7 @@ func TestGatewayPreviousResponseStaysPinnedWhenNodeAvoided(t *testing.T) {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: name,
 			ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
-			Priority: 200 - index, MaxConcurrent: 1, EgressNodeID: nodeID,
+			MaxConcurrent: 1, EgressNodeID: nodeID,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -4121,7 +4122,7 @@ func TestGatewayPinnedResponseReturnsCachedTeamRateLimitWithoutSpinning(t *testi
 	credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "pinned-team", SourceKey: "pinned-team", TeamID: teamID,
 		EncryptedAccessToken: "access", ExpiresAt: time.Now().Add(time.Hour),
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

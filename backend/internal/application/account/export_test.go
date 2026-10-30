@@ -44,7 +44,7 @@ func TestExportCredentialsRoundTripsImportFormat(t *testing.T) {
 		Provider: accountdomain.ProviderBuild, Name: "primary", Email: "user@example.com", UserID: "user-1",
 		SourceKey: "export-test", OIDCClientID: "client-1", EncryptedAccessToken: accessToken,
 		EncryptedRefreshToken: refreshToken, ExpiresAt: expiresAt, Enabled: false,
-		AuthStatus: accountdomain.AuthStatusActive, Priority: 1, MaxConcurrent: 8,
+		AuthStatus: accountdomain.AuthStatusActive, MaxConcurrent: 8,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestExportProviderCredentialsCursorKeepsStableSnapshot(t *testing.T) {
 		value, _, createErr := repository.UpsertByIdentity(ctx, accountdomain.Credential{
 			Provider: accountdomain.ProviderBuild, Name: name, SourceKey: "cursor-" + name,
 			UserID: name, EncryptedAccessToken: accessToken, Enabled: true,
-			AuthStatus: accountdomain.AuthStatusActive, Priority: 1, MaxConcurrent: 8,
+			AuthStatus: accountdomain.AuthStatusActive, MaxConcurrent: 8,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)

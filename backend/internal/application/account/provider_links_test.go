@@ -17,14 +17,14 @@ func TestSyncAccountIdentityLinksUniqueBuildWithoutSharingState(t *testing.T) {
 	service, repo, adapter := newWebAccountSettingsTestService(t)
 	web, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 		Provider: accountdomain.ProviderWeb, AuthType: accountdomain.AuthTypeSSO, Name: "web", SourceKey: "sso:" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: 7, MaxConcurrent: 3,
+		EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: accountdomain.AuthStatusActive, MaxConcurrent: 3,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	build, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 		Provider: accountdomain.ProviderBuild, AuthType: accountdomain.AuthTypeOAuth, Name: "build", SourceKey: "build", UserID: "11111111-1111-4111-8111-111111111111",
-		EncryptedAccessToken: "encrypted", Enabled: false, AuthStatus: accountdomain.AuthStatusReauthRequired, Priority: 1, MaxConcurrent: 8,
+		EncryptedAccessToken: "encrypted", Enabled: false, AuthStatus: accountdomain.AuthStatusReauthRequired, MaxConcurrent: 8,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestSyncAccountIdentityLinksUniqueBuildWithoutSharingState(t *testing.T) {
 	if web.UserID != "11111111-1111-4111-8111-111111111111" || web.Email != "user@example.com" || len(web.LinkedAccounts) != 1 || web.LinkedAccounts[0].ID != build.ID {
 		t.Fatalf("web = %#v", web)
 	}
-	if !web.Enabled || web.AuthStatus != accountdomain.AuthStatusActive || web.Priority != 7 || web.MaxConcurrent != 3 {
+	if !web.Enabled || web.AuthStatus != accountdomain.AuthStatusActive || web.MaxConcurrent != 3 {
 		t.Fatalf("web operational state changed: %#v", web)
 	}
 	if build.Enabled || build.AuthStatus != accountdomain.AuthStatusReauthRequired {
@@ -69,7 +69,7 @@ func TestSyncAccountIdentityUnauthorizedInvalidatesCurrentProviderAccount(t *tes
 	service, repo, adapter := newWebAccountSettingsTestService(t)
 	web, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 		Provider: accountdomain.ProviderWeb, AuthType: accountdomain.AuthTypeSSO, Name: "web", SourceKey: "sso:" + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: 1, MaxConcurrent: 8,
+		EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: accountdomain.AuthStatusActive, MaxConcurrent: 8,
 	})
 	if err != nil {
 		t.Fatal(err)

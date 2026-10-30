@@ -230,9 +230,13 @@ func (s *Service) executeImage(
 			lease.Release()
 			continue
 		}
+		lease.armWeight(route.UpstreamModel, 0)
 		lease.markSelectorUpstreamStarted()
 		response, err = execute(ctx, route.Provider, credential, route.UpstreamModel)
 		if err != nil {
+			if ctx.Err() != nil {
+				lease.recordWeight(ctx, route.UpstreamModel, 0, 499, "request_canceled")
+			}
 			s.logger.Error("image_upstream_failed", "event_id", eventID, "request_id", requestID, "model", externalModel, "provider", route.Provider, "account_id", credential.ID, "error", err)
 			if isSSOCredentialRejected(err, credential) {
 				s.markSSOCredentialRejected(ctx, credential, fmt.Sprintf("%s SSO credential rejected", credential.Provider))
@@ -309,6 +313,7 @@ func (s *Service) executeImage(
 	finalize := func(_ Usage, _ string, errorCode string) {
 		once.Do(func() {
 			successful := auditRequestSucceeded(response.StatusCode, errorCode)
+			lease.recordWeight(ctx, route.UpstreamModel, 0, response.StatusCode, errorCode)
 			lease.completeSelectorObservation(successful)
 			lease.Release()
 			budget := newFinalizationBudget(string(operation), string(route.Provider))

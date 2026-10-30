@@ -27,7 +27,7 @@ type segmentedSelectorCohort struct {
 	quotaAvailable  bool
 	preferFreeBuild bool
 	tier            int
-	priority        int
+	weight          int
 	billingFresh    bool
 }
 
@@ -109,8 +109,8 @@ func segmentedSelectorCohortBetter(left, right segmentedSelectorCohort) bool {
 	if left.tier != right.tier {
 		return left.tier < right.tier
 	}
-	if left.priority != right.priority {
-		return left.priority > right.priority
+	if left.weight != right.weight {
+		return left.weight > right.weight
 	}
 	if left.billingFresh != right.billingFresh {
 		return left.billingFresh

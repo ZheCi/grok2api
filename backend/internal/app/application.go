@@ -341,6 +341,16 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	dashboardService := dashboardapp.NewService(dashboardRepo)
 	selector := gateway.NewSelector(accountRepo, concurrency, sticky, providers, cfg.Routing.StickyTTL.Value(), cfg.Routing.CooldownBase.Value(), cfg.Routing.CooldownMax.Value(), cfg.Routing.CapacityWait.Value())
 	selector.SetLogger(logger)
+	selector.SetAccountWeight(gateway.AccountWeightSettings{
+		Window: string(cfg.Routing.AccountWeight.Window), SuccessRate: cfg.Routing.AccountWeight.SuccessRate,
+		CallCount: cfg.Routing.AccountWeight.CallCount, LastSuccess: cfg.Routing.AccountWeight.LastSuccess,
+		NewbieProtection: cfg.Routing.AccountWeight.NewbieProtection, IdleTime: cfg.Routing.AccountWeight.IdleTime,
+		FirstTokenSpeed: cfg.Routing.AccountWeight.FirstTokenSpeed, NewbieDays: cfg.Routing.AccountWeight.NewbieDays,
+		NewbieDailyBase: cfg.Routing.AccountWeight.NewbieDailyBase,
+	})
+	if err := selector.LoadAccountWeights(ctx); err != nil {
+		logger.Warn("account_weight_load_failed", "error", err)
+	}
 	if err := selector.LoadNodeAvoidance(ctx); err != nil {
 		logger.Warn("node_avoidance_load_failed", "error", err)
 	}
@@ -407,6 +417,13 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		quotaRecoveryService.UpdateConfig(next.Provider.Web.RecoveryBackoffBase.Value(), next.Provider.Web.RecoveryBackoffMax.Value())
 		accountSyncService.UpdateConcurrency(next.Batch.ImportConcurrency)
 		selector.UpdateConfig(next.Routing.StickyTTL.Value(), next.Routing.CooldownBase.Value(), next.Routing.CooldownMax.Value(), next.Routing.CapacityWait.Value())
+		selector.SetAccountWeight(gateway.AccountWeightSettings{
+			Window: string(next.Routing.AccountWeight.Window), SuccessRate: next.Routing.AccountWeight.SuccessRate,
+			CallCount: next.Routing.AccountWeight.CallCount, LastSuccess: next.Routing.AccountWeight.LastSuccess,
+			NewbieProtection: next.Routing.AccountWeight.NewbieProtection, IdleTime: next.Routing.AccountWeight.IdleTime,
+			FirstTokenSpeed: next.Routing.AccountWeight.FirstTokenSpeed, NewbieDays: next.Routing.AccountWeight.NewbieDays,
+			NewbieDailyBase: next.Routing.AccountWeight.NewbieDailyBase,
+		})
 		selector.UpdatePreferFreeBuild(next.Routing.PreferFreeBuild)
 		selector.UpdateSegmentedSelector(next.Routing.SegmentedSelectorEnabled, next.Routing.SegmentedMinCandidates, next.Routing.SegmentedWindowSize)
 		egressService.ConfigureAutoAssignBounds(next.Routing.AutoAssignMaxNodeShare, next.Routing.AutoAssignMaxMigrationShare)

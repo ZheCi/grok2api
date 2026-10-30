@@ -596,7 +596,7 @@ func (r *AccountRepository) listActiveProviderAccountRows(ctx context.Context, p
 	var rows []accountModel
 	if err := r.db.db.WithContext(ctx).
 		Where("provider = ? AND enabled = ? AND auth_status = ? AND inventory_group_id IS NULL", provider, true, account.AuthStatusActive).
-		Order("priority DESC, id ASC").
+		Order("id ASC").
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -892,7 +892,7 @@ func (r *AccountRepository) ListEnabledAccountIDs(ctx context.Context, provider 
 			Where("credential.encrypted_refresh <> ''")
 	}
 	var ids []uint64
-	err := query.Order("account.priority DESC, account.id ASC").Scan(&ids).Error
+	err := query.Order("account.id ASC").Scan(&ids).Error
 	return ids, err
 }
 
@@ -1399,7 +1399,6 @@ func upsertKnownAccountByIdentity(tx *gorm.DB, value account.Credential, existin
 		row.ID = existing.ID
 		row.CreatedAt = existing.CreatedAt
 		row.Enabled = existing.Enabled
-		row.Priority = existing.Priority
 		row.MaxConcurrent = existing.MaxConcurrent
 		row.MinimumRemaining = existing.MinimumRemaining
 		row.FailureCount = existing.FailureCount
@@ -1437,9 +1436,6 @@ func upsertKnownAccountByIdentity(tx *gorm.DB, value account.Credential, existin
 	}
 	if row.AuthStatus != string(account.AuthStatusReauthRequired) {
 		row.ReauthMarkedAt = nil
-	}
-	if row.Priority == 0 {
-		row.Priority = account.DefaultPriority
 	}
 	if row.MaxConcurrent == 0 {
 		row.MaxConcurrent = account.DefaultMaxConcurrent
@@ -1633,9 +1629,6 @@ func (r *AccountRepository) UpdateMany(ctx context.Context, providerValue accoun
 	values := make(map[string]any, 4)
 	if updates.Enabled != nil {
 		values["enabled"] = *updates.Enabled
-	}
-	if updates.Priority != nil {
-		values["priority"] = *updates.Priority
 	}
 	if updates.MaxConcurrent != nil {
 		values["max_concurrent"] = *updates.MaxConcurrent

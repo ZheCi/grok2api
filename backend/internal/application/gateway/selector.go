@@ -30,7 +30,17 @@ type accountLease struct {
 	QuotaMode           string
 	routingCandidate    *account.RoutingCandidate
 	selectorObservation *selectorLeaseObservation
-	release             func()
+	selector            *Selector
+	// weightOwned means the response path records the attempt itself.
+	// Other upstream calls are recorded when the lease is released.
+	weightOwned    bool
+	weightUpstream bool
+	weightFinished bool
+	weightModel    string
+	weightTokens   int64
+	newbieReserved bool
+	newbieSettled  bool
+	release        func()
 }
 
 const quotaProbeLease = 5 * time.Minute
@@ -320,6 +330,11 @@ func (l *accountLease) Release() {
 	if l == nil {
 		return
 	}
+	if l.weightUpstream && !l.weightOwned && !l.weightFinished && l.selector != nil {
+		l.selector.recordWeightAttempt(context.Background(), weightAttempt{account: l.Credential, model: l.weightModel, tokens: l.weightTokens}, "fail", l.weightTokens)
+		l.weightFinished = true
+	}
+	l.releaseNewbieReservation()
 	if l.selectorObservation != nil {
 		l.selectorObservation.completeRelease()
 	}
@@ -327,6 +342,42 @@ func (l *accountLease) Release() {
 		l.release()
 		l.release = nil
 	}
+}
+
+// armWeight marks the next upstream call on this lease so a release without
+// an explicit result still counts as a failure.
+func (l *accountLease) armWeight(model string, tokens int64) {
+	if l == nil {
+		return
+	}
+	l.weightUpstream = true
+	l.weightModel = model
+	if tokens > 0 {
+		l.weightTokens = tokens
+	}
+}
+
+// recordWeight stores one upstream result and drops the newbie reservation.
+// A 499 is not stored. Calling it before Release prevents the automatic failure.
+func (l *accountLease) recordWeight(ctx context.Context, model string, tokens int64, status int, errorCode string) {
+	if l == nil || l.weightFinished || l.selector == nil {
+		return
+	}
+	l.weightFinished = true
+	outcome := "fail"
+	if status == 499 || errorCode == "request_canceled" {
+		outcome = "cancel"
+	} else if auditRequestSucceeded(status, errorCode) {
+		outcome = "success"
+	}
+	if tokens <= 0 {
+		tokens = l.weightTokens
+	}
+	if model == "" {
+		model = l.weightModel
+	}
+	l.selector.recordWeightAttempt(ctx, weightAttempt{account: l.Credential, model: model, tokens: tokens}, outcome, tokens)
+	l.releaseNewbieReservation()
 }
 
 func (l *accountLease) markSelectorUpstreamStarted() {
@@ -383,6 +434,11 @@ type Selector struct {
 	tierOrders             interface {
 		TierOrder(account.Provider, string) []account.WebTier
 	}
+	weightMu        sync.Mutex
+	weightCfg       accountWeightRuntime
+	weights         map[uint64]*weightAccount
+	weightStore     accountWeightStore
+	weightOverrides map[uint64]int
 }
 
 func NewSelector(accounts repository.AccountRepository, concurrency repository.ConcurrencyLimiter, sticky repository.StickySessionRepository, tierOrders interface {
@@ -393,6 +449,11 @@ func NewSelector(accounts repository.AccountRepository, concurrency repository.C
 		wait = capacityWait[0]
 	}
 	selector := &Selector{accounts: accounts, concurrency: concurrency, sticky: sticky, tierOrders: tierOrders, stickyTTL: stickyTTL, cooldownBase: cooldownBase, cooldownMax: cooldownMax, capacityWait: wait, leaseWake: make(chan struct{}), logger: slog.Default(), lastSelectedAt: make(map[uint64]time.Time), lastSuccessAt: make(map[uint64]time.Time), healthOverrides: make(map[uint64]routingHealthOverride), quotaConsumed: make(map[quotaConsumptionKey]int), staleFallbackLoggedAt: make(map[string]time.Time), candidates: make(map[candidateCacheKey]candidateSnapshot), routingBases: make(map[routingBaseCacheKey]routingBaseSnapshot), routingOverlays: make(map[routingOverlayCacheKey]routingOverlaySnapshot), routingAccountProvider: make(map[uint64]account.Provider), baseProviderVersion: make(map[account.Provider]uint64), overlayProviderVersion: make(map[account.Provider]uint64), concurrencySnapshots: resultcache.New[[32]byte, map[string]int](maxConcurrencySnapshots, concurrencySnapshotTTL), nodeQuality: nodeQualityAvoidance{nodes: make(map[uint64]*nodeQualityState)}}
+	selector.weights = map[uint64]*weightAccount{}
+	selector.weightCfg = defaultAccountWeightRuntime()
+	if store, ok := accounts.(accountWeightStore); ok {
+		selector.weightStore = store
+	}
 	if store, ok := accounts.(nodeAvoidanceStore); ok {
 		selector.nodeAvoidance = store
 	}
@@ -584,6 +645,13 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 		if value.CooldownUntil != nil && now.Before(*value.CooldownUntil) {
 			coolingCandidates++
 			earliestRetry = earlierFuture(earliestRetry, *value.CooldownUntil, now)
+			continue
+		}
+		if s.weightCapped(value, now) {
+			coolingCandidates++
+			if retryAt := s.newbieCapRetry(value, now); !retryAt.IsZero() {
+				earliestRetry = earlierFuture(earliestRetry, retryAt, now)
+			}
 			continue
 		}
 		quotaRecovery := candidate.QuotaRecovery
@@ -2259,9 +2327,11 @@ func (s *Selector) claimAccountSlotTracked(ctx context.Context, value account.Cr
 	s.selectionMu.Lock()
 	s.lastSelectedAt[value.ID] = time.Now().UTC()
 	s.selectionMu.Unlock()
-	return &accountLease{Credential: value, release: func() {
+	lease := &accountLease{Credential: value, selector: s, release: func() {
 		releaseSlot()
-	}}, nil
+	}}
+	lease.newbieReserved = s.reserveNewbieAttempt(value)
+	return lease, nil
 }
 
 func (s *Selector) acquirePinnedCapacity(ctx context.Context, value account.Credential, materialFailures *credentialMaterialFailureTracker) (*accountLease, error) {

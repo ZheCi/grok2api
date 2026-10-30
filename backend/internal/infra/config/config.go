@@ -241,7 +241,40 @@ type RoutingConfig struct {
 	// unbounded first-pass evacuation and the existing 200-move ceiling for
 	// capacity/rebalance repair. GROK2API_AUTO_ASSIGN_MAX_MIGRATION_SHARE
 	// overrides this field when set to a valid value.
-	AutoAssignMaxMigrationShare float64 `yaml:"autoAssignMaxMigrationShare"`
+	AutoAssignMaxMigrationShare float64             `yaml:"autoAssignMaxMigrationShare"`
+	AccountWeight               AccountWeightConfig `yaml:"accountWeight"`
+}
+
+// AccountWeightConfig replaces manual account priority. Ratios do not need to
+// sum to 1. Window accepts 6h, 24h, 7d, 30d, 60d, 90d; empty or 0 means 24h.
+type AccountWeightConfig struct {
+	Window           AccountWeightWindow `yaml:"window"`
+	SuccessRate      float64             `yaml:"successRate"`
+	CallCount        float64             `yaml:"callCount"`
+	LastSuccess      float64             `yaml:"lastSuccess"`
+	NewbieProtection float64             `yaml:"newbieProtection"`
+	IdleTime         float64             `yaml:"idleTime"`
+	FirstTokenSpeed  float64             `yaml:"firstTokenSpeed"`
+	NewbieDays       int                 `yaml:"newbieDays"`
+	NewbieDailyBase  int                 `yaml:"newbieDailyBase"`
+}
+
+// AccountWeightWindow is a closed set of scheduling-stat windows.
+type AccountWeightWindow string
+
+func (w *AccountWeightWindow) UnmarshalYAML(value *yaml.Node) error {
+	if value == nil || value.Kind != yaml.ScalarNode {
+		return errors.New("routing.accountWeight.window 无效")
+	}
+	if value.Tag == "!!int" || value.Tag == "!!float" {
+		if value.Value == "0" || value.Value == "0.0" {
+			*w = "0"
+			return nil
+		}
+		return errors.New("routing.accountWeight.window 只能是 6h、24h、7d、30d、60d、90d 或 0")
+	}
+	*w = AccountWeightWindow(strings.TrimSpace(value.Value))
+	return nil
 }
 
 type AuditConfig struct {
@@ -705,6 +738,9 @@ func (c Config) Validate() error {
 	if c.Routing.ReasoningReplayMaxEntries < 100 || c.Routing.ReasoningReplayMaxEntries > 1000000 {
 		return errors.New("routing.reasoningReplayMaxEntries 必须在 100 到 1000000 之间")
 	}
+	if err := validateAccountWeight(c.Routing.AccountWeight); err != nil {
+		return err
+	}
 	if !validAutoAssignShare(c.Routing.AutoAssignMaxNodeShare) || !validAutoAssignShare(c.Routing.AutoAssignMaxMigrationShare) {
 		return errors.New("routing.autoAssignMaxNodeShare 与 autoAssignMaxMigrationShare 必须为 0 或 0.05 到 1 之间")
 	}
@@ -861,6 +897,21 @@ func validateQualityGuardRequestRetry(value QualityGuardRequestRetryConfig) erro
 	return nil
 }
 
+func validateAccountWeight(value AccountWeightConfig) error {
+	switch string(value.Window) {
+	case "", "0", "6h", "24h", "7d", "30d", "60d", "90d":
+	default:
+		return errors.New("routing.accountWeight.window 只能是 6h、24h、7d、30d、60d、90d 或 0")
+	}
+	if value.NewbieDays < 0 || value.NewbieDays > 90 {
+		return errors.New("routing.accountWeight.newbieDays 必须在 0 到 90 之间")
+	}
+	if value.NewbieDays > 0 && (value.NewbieDailyBase < 1 || value.NewbieDailyBase > 100000) {
+		return errors.New("routing.accountWeight.newbieDailyBase 必须在 1 到 100000 之间")
+	}
+	return nil
+}
+
 func validAutoAssignShare(value float64) bool {
 	return value == 0 || (value >= 0.05 && value <= 1)
 }
@@ -976,6 +1027,10 @@ func defaultConfig() Config {
 			ReasoningReplayEnabled:      true,
 			ReasoningReplayTTL:          Duration(time.Hour),
 			ReasoningReplayMaxEntries:   10240,
+			AccountWeight: AccountWeightConfig{
+				Window: "24h", SuccessRate: 0.50, NewbieProtection: 0.30, IdleTime: 0.20, FirstTokenSpeed: 0.30,
+				NewbieDays: 7, NewbieDailyBase: 20,
+			},
 		},
 		Audit: AuditConfig{
 			BufferSize: 16384, BatchSize: 256, FlushInterval: Duration(250 * time.Millisecond), CommitDelay: Duration(5 * time.Millisecond),

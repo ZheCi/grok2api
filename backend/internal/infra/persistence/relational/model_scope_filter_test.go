@@ -45,11 +45,11 @@ func assertModelListFiltersByClientKeyProviderAndTierScope(t *testing.T, databas
 
 	now := time.Now().UTC()
 	accounts := []accountModel{
-		{IdentityKey: testIdentityKey("scope-build-free"), Provider: string(account.ProviderBuild), Name: "build-free", SourceKey: "build-free", ObservedModel: "grok-build-free", Enabled: true, AuthStatus: string(account.AuthStatusActive), Priority: 1},
-		{IdentityKey: testIdentityKey("scope-build-super"), Provider: string(account.ProviderBuild), Name: "build-super", SourceKey: "build-super", Enabled: true, AuthStatus: string(account.AuthStatusActive), Priority: 1},
-		{IdentityKey: testIdentityKey("scope-web-free"), Provider: string(account.ProviderWeb), Name: "web-free", SourceKey: "web-free", Enabled: true, AuthStatus: string(account.AuthStatusActive), Priority: 1},
-		{IdentityKey: testIdentityKey("scope-web-super"), Provider: string(account.ProviderWeb), Name: "web-super", SourceKey: "web-super", Enabled: true, AuthStatus: string(account.AuthStatusActive), Priority: 1},
-		{IdentityKey: testIdentityKey("scope-console"), Provider: string(account.ProviderConsole), Name: "console", SourceKey: "console", Enabled: true, AuthStatus: string(account.AuthStatusActive), Priority: 1},
+		{IdentityKey: testIdentityKey("scope-build-free"), Provider: string(account.ProviderBuild), Name: "build-free", SourceKey: "build-free", ObservedModel: "grok-build-free", Enabled: true, AuthStatus: string(account.AuthStatusActive)},
+		{IdentityKey: testIdentityKey("scope-build-super"), Provider: string(account.ProviderBuild), Name: "build-super", SourceKey: "build-super", Enabled: true, AuthStatus: string(account.AuthStatusActive)},
+		{IdentityKey: testIdentityKey("scope-web-free"), Provider: string(account.ProviderWeb), Name: "web-free", SourceKey: "web-free", Enabled: true, AuthStatus: string(account.AuthStatusActive)},
+		{IdentityKey: testIdentityKey("scope-web-super"), Provider: string(account.ProviderWeb), Name: "web-super", SourceKey: "web-super", Enabled: true, AuthStatus: string(account.AuthStatusActive)},
+		{IdentityKey: testIdentityKey("scope-console"), Provider: string(account.ProviderConsole), Name: "console", SourceKey: "console", Enabled: true, AuthStatus: string(account.AuthStatusActive)},
 	}
 	for index := range accounts {
 		if err := database.db.WithContext(ctx).Create(&accounts[index]).Error; err != nil {

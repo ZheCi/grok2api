@@ -19,13 +19,13 @@ func TestRoutingLargeSQLiteAccountPoolDoesNotExceedVariableLimit(t *testing.T) {
 		)
 		INSERT INTO provider_accounts (
 			id, identity_key, provider, name, email, user_id, team_id, source_key,
-			enabled, auth_status, priority, max_concurrent, minimum_remaining,
+			enabled, auth_status, max_concurrent, minimum_remaining,
 			failure_count, last_error, observed_model, build_api_fallback,
 			build_route_mode, build_super_entitled, egress_assignment_mode,
 			created_at, updated_at
 		)
 		SELECT id, printf('%064x', id), 'grok_console', 'account-' || id, '', '', '',
-			'source-' || id, 1, 'active', 1, 8, 0, 0, '', '', 0, 'auto', 0, '',
+			'source-' || id, 1, 'active', 8, 0, 0, '', '', 0, 'auto', 0, '',
 			CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 		FROM seq`, accountCount).Error; err != nil {
 		t.Fatal(err)

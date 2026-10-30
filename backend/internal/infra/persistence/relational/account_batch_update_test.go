@@ -93,7 +93,7 @@ func seedBatchUpdateAccounts(t *testing.T, database *Database, count int) []acco
 		rows[index] = accountModel{
 			IdentityKey: fmt.Sprintf("%064x", index+1),
 			Provider:    string(account.ProviderBuild), Name: fmt.Sprintf("batch-%d", index+1), SourceKey: fmt.Sprintf("batch-%d", index+1),
-			Enabled: true, AuthStatus: string(account.AuthStatusActive), Priority: account.DefaultPriority, MaxConcurrent: account.DefaultMaxConcurrent,
+			Enabled: true, AuthStatus: string(account.AuthStatusActive), MaxConcurrent: account.DefaultMaxConcurrent,
 			BuildRouteMode: string(account.BuildRouteAuto), CreatedAt: now, UpdatedAt: now,
 		}
 	}

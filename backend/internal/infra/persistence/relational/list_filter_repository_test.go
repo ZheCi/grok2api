@@ -24,9 +24,9 @@ func TestListFilters(t *testing.T) {
 	}
 	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 
-	free := accountModel{IdentityKey: testIdentityKey("free"), Provider: "grok_build", Name: "free", SourceKey: "free", ObservedModel: "grok-build-free", Enabled: true, AuthStatus: "active", Priority: 1}
-	paid := accountModel{IdentityKey: testIdentityKey("paid"), Provider: "grok_build", Name: "paid", SourceKey: "paid", Enabled: true, AuthStatus: "active", Priority: 1}
-	disabled := accountModel{IdentityKey: testIdentityKey("disabled-filter"), Provider: "grok_build", Name: "disabled", SourceKey: "disabled-filter", Enabled: false, AuthStatus: "active", Priority: 1}
+	free := accountModel{IdentityKey: testIdentityKey("free"), Provider: "grok_build", Name: "free", SourceKey: "free", ObservedModel: "grok-build-free", Enabled: true, AuthStatus: "active"}
+	paid := accountModel{IdentityKey: testIdentityKey("paid"), Provider: "grok_build", Name: "paid", SourceKey: "paid", Enabled: true, AuthStatus: "active"}
+	disabled := accountModel{IdentityKey: testIdentityKey("disabled-filter"), Provider: "grok_build", Name: "disabled", SourceKey: "disabled-filter", Enabled: false, AuthStatus: "active"}
 	for _, value := range []*accountModel{&free, &paid, &disabled} {
 		if err := database.db.WithContext(ctx).Create(value).Error; err != nil {
 			t.Fatal(err)
@@ -89,7 +89,7 @@ func TestListFilters(t *testing.T) {
 	assertAccountFilterCount(t, ctx, accounts, repository.AccountListFilter{Egress: "bound", EgressNodeID: secondSourceNode.ID, Now: now}, 1)
 
 	// 零 Billing + build_super_entitled：paid 可查到，free 查不到。
-	entitled := accountModel{IdentityKey: testIdentityKey("entitled-zero"), Provider: "grok_build", Name: "entitled-zero", SourceKey: "entitled-zero", ObservedModel: "grok-build-free", Enabled: true, AuthStatus: "active", Priority: 1, BuildSuperEntitled: true}
+	entitled := accountModel{IdentityKey: testIdentityKey("entitled-zero"), Provider: "grok_build", Name: "entitled-zero", SourceKey: "entitled-zero", ObservedModel: "grok-build-free", Enabled: true, AuthStatus: "active", BuildSuperEntitled: true}
 	if err := database.db.WithContext(ctx).Create(&entitled).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestListFilters(t *testing.T) {
 
 	var webByTier = map[string]accountModel{}
 	for _, tier := range []string{"auto", "basic", "super", "heavy"} {
-		value := accountModel{IdentityKey: testIdentityKey("web-" + tier), Provider: "grok_web", Name: "web-" + tier, SourceKey: "web-" + tier, Enabled: true, AuthStatus: "active", Priority: 1}
+		value := accountModel{IdentityKey: testIdentityKey("web-" + tier), Provider: "grok_web", Name: "web-" + tier, SourceKey: "web-" + tier, Enabled: true, AuthStatus: "active"}
 		if err := database.db.WithContext(ctx).Create(&value).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -151,8 +151,8 @@ func TestListFilters(t *testing.T) {
 	assertAccountFilterCount(t, ctx, accounts, repository.AccountListFilter{Provider: "grok_web", Agreement: "allAccepted", Now: now}, 1)
 	assertAccountFilterCount(t, ctx, accounts, repository.AccountListFilter{Provider: "grok_web", Agreement: "allNotAccepted", Now: now}, 1)
 
-	buildAccount := accountModel{IdentityKey: testIdentityKey("link-build"), Provider: "grok_build", Name: "link-build", SourceKey: "link-build", Enabled: true, AuthStatus: "active", Priority: 1}
-	consoleAccount := accountModel{IdentityKey: testIdentityKey("link-console"), Provider: "grok_console", Name: "link-console", SourceKey: "link-console", Enabled: true, AuthStatus: "active", Priority: 1}
+	buildAccount := accountModel{IdentityKey: testIdentityKey("link-build"), Provider: "grok_build", Name: "link-build", SourceKey: "link-build", Enabled: true, AuthStatus: "active"}
+	consoleAccount := accountModel{IdentityKey: testIdentityKey("link-console"), Provider: "grok_console", Name: "link-console", SourceKey: "link-console", Enabled: true, AuthStatus: "active"}
 	for _, value := range []*accountModel{&buildAccount, &consoleAccount} {
 		if err := database.db.WithContext(ctx).Create(value).Error; err != nil {
 			t.Fatal(err)
@@ -164,8 +164,8 @@ func TestListFilters(t *testing.T) {
 	if err := database.db.WithContext(ctx).Create(&webConsoleAccountLinkModel{WebAccountID: termsWeb.ID, ConsoleAccountID: consoleAccount.ID, CreatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
-	bothLinkedBuild := accountModel{IdentityKey: testIdentityKey("both-build"), Provider: "grok_build", Name: "both-build", SourceKey: "both-build", Enabled: true, AuthStatus: "active", Priority: 1}
-	bothLinkedConsole := accountModel{IdentityKey: testIdentityKey("both-console"), Provider: "grok_console", Name: "both-console", SourceKey: "both-console", Enabled: true, AuthStatus: "active", Priority: 1}
+	bothLinkedBuild := accountModel{IdentityKey: testIdentityKey("both-build"), Provider: "grok_build", Name: "both-build", SourceKey: "both-build", Enabled: true, AuthStatus: "active"}
+	bothLinkedConsole := accountModel{IdentityKey: testIdentityKey("both-console"), Provider: "grok_console", Name: "both-console", SourceKey: "both-console", Enabled: true, AuthStatus: "active"}
 	for _, value := range []*accountModel{&bothLinkedBuild, &bothLinkedConsole} {
 		if err := database.db.WithContext(ctx).Create(value).Error; err != nil {
 			t.Fatal(err)
@@ -184,7 +184,7 @@ func TestListFilters(t *testing.T) {
 	assertAccountFilterCount(t, ctx, accounts, repository.AccountListFilter{Provider: "grok_web", Association: "allLinked", Now: now}, 1)
 	assertAccountFilterCount(t, ctx, accounts, repository.AccountListFilter{Provider: "grok_web", Association: "allUnlinked", Now: now}, 1)
 	// Seed an orphan Console account so the Build/Console Web-link filters have an unlinked result.
-	orphanConsole := accountModel{IdentityKey: testIdentityKey("orphan-console"), Provider: "grok_console", Name: "orphan-console", SourceKey: "orphan-console", Enabled: true, AuthStatus: "active", Priority: 1}
+	orphanConsole := accountModel{IdentityKey: testIdentityKey("orphan-console"), Provider: "grok_console", Name: "orphan-console", SourceKey: "orphan-console", Enabled: true, AuthStatus: "active"}
 	if err := database.db.WithContext(ctx).Create(&orphanConsole).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestListFiltersRecognizesInferredFreeBilling(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	value := accountModel{IdentityKey: testIdentityKey("inferred-free"), Provider: "grok_build", Name: "inferred-free", SourceKey: "inferred-free", Enabled: true, AuthStatus: "active", Priority: 1}
+	value := accountModel{IdentityKey: testIdentityKey("inferred-free"), Provider: "grok_build", Name: "inferred-free", SourceKey: "inferred-free", Enabled: true, AuthStatus: "active"}
 	if err := database.db.WithContext(ctx).Create(&value).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestListFiltersRecognizesSuperGrokPlusAsPaid(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	value := accountModel{IdentityKey: testIdentityKey("plus"), Provider: "grok_build", Name: "plus", SourceKey: "plus", Enabled: true, AuthStatus: "active", Priority: 1}
+	value := accountModel{IdentityKey: testIdentityKey("plus"), Provider: "grok_build", Name: "plus", SourceKey: "plus", Enabled: true, AuthStatus: "active"}
 	if err := database.db.WithContext(ctx).Create(&value).Error; err != nil {
 		t.Fatal(err)
 	}

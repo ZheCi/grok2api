@@ -113,7 +113,7 @@ func TestFinishBuildDetectResponseUsesScopedFailureState(t *testing.T) {
 	stored, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 		Provider: accountdomain.ProviderBuild, Name: "spending-limit", UserID: "user-1",
 		SourceKey: "detect-spending-limit", EncryptedAccessToken: accessToken,
-		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: 1, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +145,7 @@ func TestFinishBuildDetectResponseUsesScopedFailureState(t *testing.T) {
 	deniedAccount, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 		Provider: accountdomain.ProviderBuild, Name: "model-denied", UserID: "user-2",
 		SourceKey: "detect-model-denied", EncryptedAccessToken: accessToken,
-		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: 1, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +183,7 @@ func TestFinishBuildDetectResponseUsesScopedFailureState(t *testing.T) {
 	freeAccount, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 		Provider: accountdomain.ProviderBuild, Name: "free-exhausted", UserID: "user-3",
 		SourceKey: "detect-free-exhausted", EncryptedAccessToken: accessToken,
-		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: 1, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +203,7 @@ func TestFinishBuildDetectResponseUsesScopedFailureState(t *testing.T) {
 	modelQuotaAccount, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 		Provider: accountdomain.ProviderBuild, Name: "model-quota", UserID: "user-4",
 		SourceKey: "detect-model-quota", EncryptedAccessToken: accessToken,
-		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: 1, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +253,7 @@ func TestDetectBuildAccountsStreamsInvalidOnlyForAll(t *testing.T) {
 	okAccount, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 		Provider: accountdomain.ProviderBuild, Name: "ok", UserID: "user-ok",
 		SourceKey: "detect-ok", EncryptedAccessToken: accessToken,
-		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, RefreshPermanent: true, Priority: 1, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, RefreshPermanent: true, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -261,7 +261,7 @@ func TestDetectBuildAccountsStreamsInvalidOnlyForAll(t *testing.T) {
 	invalidAccount, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 		Provider: accountdomain.ProviderBuild, Name: "invalid", UserID: "user-invalid",
 		SourceKey: "detect-invalid", EncryptedAccessToken: accessToken,
-		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, RefreshPermanent: true, Priority: 1, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: accountdomain.AuthStatusActive, RefreshPermanent: true, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -390,7 +390,7 @@ func newConcurrentInvalidBuildDetectService(t *testing.T, accountCount int) *Ser
 		if _, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 			Provider: accountdomain.ProviderBuild, Name: "invalid-" + strconv.Itoa(index), UserID: "user-invalid-" + strconv.Itoa(index),
 			SourceKey: "detect-invalid-" + strconv.Itoa(index), EncryptedAccessToken: accessToken,
-			Enabled: true, AuthStatus: accountdomain.AuthStatusActive, RefreshPermanent: true, Priority: 1, MaxConcurrent: 1,
+			Enabled: true, AuthStatus: accountdomain.AuthStatusActive, RefreshPermanent: true, MaxConcurrent: 1,
 		}); err != nil {
 			t.Fatal(err)
 		}

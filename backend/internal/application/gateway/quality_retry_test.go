@@ -1485,7 +1485,7 @@ func TestInventoryProbeDeliverKeepsNodeSkip(t *testing.T) {
 		Provider: accountdomain.ProviderBuild, Name: "inventory-probe", SourceKey: "inventory-probe",
 		EncryptedAccessToken: "inventory-probe", EncryptedRefreshToken: "refresh-inventory-probe",
 		ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: accountdomain.AuthStatusActive,
-		Priority: 200, MaxConcurrent: 1, EgressNodeID: nodeID,
+		MaxConcurrent: 1, EgressNodeID: nodeID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1560,11 +1560,11 @@ func TestAttemptLoopQualityHold(t *testing.T) {
 	keyRepo := relational.NewClientKeyRepository(database)
 
 	credentials := make([]accountdomain.Credential, 0, 3)
-	for index, name := range []string{"quality-empty", "quality-no-think", "quality-thinking"} {
+	for _, name := range []string{"quality-empty", "quality-no-think", "quality-thinking"} {
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, accountdomain.Credential{
 			Provider: accountdomain.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: name,
 			EncryptedRefreshToken: "refresh-" + name, ExpiresAt: time.Now().Add(time.Hour),
-			Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: 200 - index, MaxConcurrent: 1,
+			Enabled: true, AuthStatus: accountdomain.AuthStatusActive, MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -1697,7 +1697,7 @@ func TestAttemptLoopQualityHoldFailOpenKeepsSingleAccountBody(t *testing.T) {
 		Provider: accountdomain.ProviderBuild, Name: "quality-only", SourceKey: "quality-only",
 		EncryptedAccessToken: "quality-only", EncryptedRefreshToken: "refresh-quality-only",
 		ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: accountdomain.AuthStatusActive,
-		Priority: 200, MaxConcurrent: 1,
+		MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1785,7 +1785,7 @@ func TestAttemptLoopQualityFailOpenFallbackAndTotalAttemptCap(t *testing.T) {
 			Provider: accountdomain.ProviderBuild, Name: name, SourceKey: name,
 			EncryptedAccessToken: name, EncryptedRefreshToken: "refresh-" + name,
 			ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: accountdomain.AuthStatusActive,
-			Priority: 300 - index, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)

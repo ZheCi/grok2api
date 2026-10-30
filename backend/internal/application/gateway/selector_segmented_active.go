@@ -85,7 +85,13 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 			}
 		} else {
 			concurrencyHints := make(map[int]int, min(len(indexes), request.windowSize*segmentedWindowsBeforeFullFallback))
-			cohorts := segmentedCandidateCohorts(values, indexes, now, tierOrder, preferFreeBuild, request.cursor, request.windowSize, segmentedWindowsBeforeFullFallback)
+			hint := weightHintFrom(ctx)
+			cohorts := segmentedCandidateCohorts(values, indexes, now, tierOrder, preferFreeBuild, request.cursor, request.windowSize, segmentedWindowsBeforeFullFallback, func(candidate account.RoutingCandidate) int {
+				s.selectionMu.RLock()
+				lastSelected := s.lastSelectedAt[candidate.Credential.ID]
+				s.selectionMu.RUnlock()
+				return s.accountWeight(candidate.Credential, now, hint.model, hint.tokens, lastSelected)
+			})
 			roundWindows := 0
 			fallbackToFull := false
 			for cohortIndex, bucket := range cohorts {
@@ -187,7 +193,7 @@ func (s *Selector) claimSegmentedPlan(ctx context.Context, plan *candidatePlan, 
 	return result, nil
 }
 
-func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, preferFreeBuild bool, cursor uint64, windowSize, maxWindows int) []segmentedSelectorCohortBucket {
+func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, preferFreeBuild bool, cursor uint64, windowSize, maxWindows int, weightOf func(account.RoutingCandidate) int) []segmentedSelectorCohortBucket {
 	if windowSize <= 0 || maxWindows <= 0 {
 		return nil
 	}
@@ -200,7 +206,7 @@ func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int,
 		cohort := segmentedSelectorCohort{
 			supportsModel: supportsModel, capabilityKnown: capabilityKnown,
 			preferFreeBuild: preferFreeBuild && candidate.IsKnownFreeBuild(),
-			tier:            tierOrderRank(tierOrder, candidate.Credential.WebTier), priority: candidate.Credential.Priority,
+			tier:            tierOrderRank(tierOrder, candidate.Credential.WebTier), weight: weightOfCandidate(weightOf, candidate),
 		}
 		if candidate.QuotaWindow != nil && candidate.QuotaWindow.Source == account.QuotaSourceUpstream {
 			cohort.quotaKnown = true
@@ -293,4 +299,11 @@ func observeSegmentedActive(provider account.Provider, outcome, stage string, st
 	perfmetrics.Default.ObserveDuration("selector_segmented_active_duration_us", labels, time.Since(startedAt))
 	perfmetrics.Default.Add("selector_segmented_active_windows", labels, int64(windows))
 	perfmetrics.Default.Add("selector_segmented_active_candidates", labels, int64(candidates))
+}
+
+func weightOfCandidate(weightOf func(account.RoutingCandidate) int, candidate account.RoutingCandidate) int {
+	if weightOf == nil {
+		return 0
+	}
+	return weightOf(candidate)
 }

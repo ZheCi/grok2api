@@ -96,7 +96,6 @@ func (m BuildRouteMode) IsValid() bool {
 }
 
 const (
-	DefaultPriority         = 1
 	DefaultMaxConcurrent    = 8
 	DefaultMinimumRemaining = 0
 	MaxConcurrent           = 256
@@ -185,7 +184,6 @@ type Credential struct {
 	AuthStatus                   AuthStatus
 	// ReauthMarkedAt 仅在切入 reauthRequired 时写入；恢复 active 时清空。自动清理以该时刻为 minAge 锚点。
 	ReauthMarkedAt   *time.Time
-	Priority         int
 	MaxConcurrent    int
 	MinimumRemaining float64
 	FailureCount     int

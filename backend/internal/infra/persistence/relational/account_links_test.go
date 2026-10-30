@@ -233,7 +233,6 @@ func createLinkedAccountTestCredential(t *testing.T, ctx context.Context, repo *
 	value.EncryptedAccessToken = "encrypted"
 	value.Enabled = true
 	value.AuthStatus = account.AuthStatusActive
-	value.Priority = account.DefaultPriority
 	value.MaxConcurrent = account.DefaultMaxConcurrent
 	stored, _, err := repo.UpsertByIdentity(ctx, value)
 	if err != nil {

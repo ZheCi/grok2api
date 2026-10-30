@@ -807,10 +807,11 @@ func TestVideoWebForbiddenRetriesPinnedAccountOnceThenFailsOver(t *testing.T) {
 		t.Fatal(err)
 	}
 	createAccount := func(name string, priority int) account.Credential {
+		_ = priority
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierSuper,
 			Name: name, SourceKey: name, EncryptedAccessToken: name + "-token", ExpiresAt: time.Now().Add(time.Hour),
-			Enabled: true, AuthStatus: account.AuthStatusActive, Priority: priority, MaxConcurrent: 1,
+			Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)
@@ -932,10 +933,11 @@ func TestVideoRetryDoesNotEscapeClientKeyAccountScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	createAccount := func(name string, tier account.WebTier, priority int) account.Credential {
+		_ = priority
 		credential, _, createErr := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: tier,
 			Name: name, SourceKey: name, EncryptedAccessToken: name + "-token", ExpiresAt: time.Now().Add(time.Hour),
-			Enabled: true, AuthStatus: account.AuthStatusActive, Priority: priority, MaxConcurrent: 1,
+			Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 		})
 		if createErr != nil {
 			t.Fatal(createErr)

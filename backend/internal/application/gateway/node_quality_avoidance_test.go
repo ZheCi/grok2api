@@ -435,10 +435,11 @@ func createBuildNodes(t *testing.T, ctx context.Context, database *relational.Da
 }
 
 func insertNodeAccount(ctx context.Context, accounts *relational.AccountRepository, name string, priority int, nodeID uint64) (account.Credential, error) {
+	_ = priority
 	credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: name, SourceKey: name, EncryptedAccessToken: name,
 		EncryptedRefreshToken: "refresh-" + name, ExpiresAt: time.Now().Add(time.Hour),
-		Enabled: true, AuthStatus: account.AuthStatusActive, Priority: priority, MaxConcurrent: 1,
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 		EgressNodeID: nodeID,
 	})
 	return credential, err

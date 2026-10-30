@@ -147,6 +147,7 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 			writeFailureAudit(http.StatusBadGateway, "upstream_unavailable", &credential)
 			return nil, ErrNoAvailableAccount
 		}
+		lease.armWeight(route.UpstreamModel, 0)
 		lease.markSelectorUpstreamStarted()
 		conn, cleanup, dialErr := adapter.DialVoiceWebSocket(ctx, provider.VoiceWebSocketRequest{
 			Credential: credential,
@@ -154,6 +155,9 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 			Model:      route.UpstreamModel,
 		})
 		if dialErr != nil {
+			if ctx.Err() != nil {
+				lease.recordWeight(ctx, route.UpstreamModel, 0, 499, "request_canceled")
+			}
 			if cleanup != nil {
 				cleanup()
 			}
@@ -230,6 +234,8 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 					cleanup()
 				}
 				successful := strings.TrimSpace(outcome.ErrorCode) == ""
+				status, code := voiceWebSocketAuditOutcome(outcome)
+				accountLeaseRef.recordWeight(ctx, route.UpstreamModel, 0, status, code)
 				accountLeaseRef.completeSelectorObservation(!outcome.UpstreamFailed)
 				accountLeaseRef.Release()
 

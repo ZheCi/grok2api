@@ -1086,6 +1086,9 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	responseStartedAt := startedAt
 	transientRetry := 0
 	transientRetryAccount := uint64(0)
+	var weightPending *weightAttempt
+	var weightDegraded bool
+	weightInputTokens := audit.EstimateRequestInputTokens(input.Body)
 	forwardResponse := func(lease *accountLease, credential accountdomain.Credential, billing *accountdomain.Billing) (*provider.Response, error) {
 		started := time.Now()
 		responseStartedAt = started
@@ -1093,6 +1096,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 			firstToken.reset(started)
 		}
 		lease.markSelectorUpstreamStarted()
+		s.openWeightAttempt(&weightPending, lease, credential, route.UpstreamModel, weightInputTokens, firstToken)
 		response, err := adapter.ForwardResponse(physicalCallCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, TransientRetry: buildTransientRetryCount(credential, &transientRetryAccount, &transientRetry), IdempotencyID: idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(operation), NormalizedMetadata: normalizedMetadata})
 		auditBase.ReasoningEffort = normalizedMetadata.ReasoningEffort
 		err = failureAttempts.captureResponse(credential, started, response, err)
@@ -1108,9 +1112,23 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	}
 	handoffResponse := func(response *provider.Response, lease *accountLease, credential accountdomain.Credential, upstreamStartedAt time.Time) *Result {
 		accountID := credential.ID
+		if weightPending != nil {
+			weightPending.handedOff = true
+			weightPending.degraded = weightDegraded
+		}
 		var once sync.Once
 		finalize := func(usage Usage, responseID, errorCode string) {
 			once.Do(func() {
+				if weightPending != nil && weightPending.handedOff && weightPending.account.ID == accountID {
+					outcome := "fail"
+					if !weightPending.degraded && errorCode != "request_canceled" && auditRequestSucceeded(response.StatusCode, errorCode) {
+						outcome = "success"
+					} else if errorCode == "request_canceled" {
+						outcome = "cancel"
+					}
+					s.commitWeight(context.WithoutCancel(ctx), weightPending, outcome, usage.InputTokens)
+					weightPending = nil
+				}
 				// HTTP 状态码保留线上真实值；流在 2xx 响应头之后失败时由 errorCode
 				// 决定最终结果，避免把协议状态与业务结果混为一谈。
 				successful := auditRequestSucceeded(response.StatusCode, errorCode)
@@ -1271,6 +1289,22 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 		_ = fallback.response.Body.Close()
 		fallback = nil
 	}
+	ctx = WithWeightHint(ctx, route.UpstreamModel, weightInputTokens)
+	defer func() {
+		if weightPending != nil && !weightPending.handedOff {
+			outcome := "fail"
+			if weightPending.canceled {
+				outcome = "cancel"
+			}
+			s.commitWeight(context.WithoutCancel(ctx), weightPending, outcome, 0)
+			weightPending = nil
+		}
+	}()
+	cancelWeight := func() {
+		if weightPending != nil {
+			weightPending.canceled = true
+		}
+	}
 attemptLoop:
 	for attempt := 0; attemptPolicy.allows(attempt); attempt++ {
 		if qualityHoldEnabled && qualityAccountAttempts >= holdCfg.MaxAttempts {
@@ -1364,6 +1398,7 @@ attemptLoop:
 			lastErr = err
 			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 				lastFailure = &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(ctx.Err(), err)}
+				cancelWeight()
 				break
 			}
 			if isSSOCredentialRejected(err, credential) {
@@ -1437,6 +1472,7 @@ attemptLoop:
 					lastFailure = newCredentialUpstreamFailure(refreshErr, credential.ID, credential.Name)
 				} else if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 					lastFailure = &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(ctx.Err(), err)}
+					cancelWeight()
 					break
 				} else {
 					lastFailure = newTransportUpstreamFailure(err, credential.ID, credential.Name)
@@ -1563,6 +1599,7 @@ attemptLoop:
 					lastErr = err
 					if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 						lastFailure = &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(ctx.Err(), err)}
+						cancelWeight()
 						break attemptLoop
 					}
 					lastFailure = newTransportUpstreamFailure(err, credential.ID, credential.Name)
@@ -1662,6 +1699,7 @@ attemptLoop:
 					lastErr = peekErr
 					if isClientRequestCancel(ctx, peekErr) {
 						lastFailure = &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(ctx.Err(), peekErr)}
+						cancelWeight()
 						break
 					}
 					var streamFailed *qualityStreamFailedError
@@ -1756,9 +1794,11 @@ attemptLoop:
 					s.logger.Info("quality_degraded_rejected", "request_id", input.RequestID, "account_id", credential.ID)
 					break attemptLoop
 				case QualityActionDeliverLast:
+					weightDegraded = true
 					discardFallback(true)
 					s.logger.Info("quality_degraded_deliver_last", "request_id", input.RequestID, "account_id", credential.ID, "quality_attempt", qualityAccountAttempts, "output_tokens", peekUsage.OutputTokens)
 				case QualityActionDeliver:
+					weightDegraded = false
 					discardFallback(true)
 					if s.selector != nil && !input.skipQualityPenalty {
 						s.selector.NoteNodeQualityDelivered(credential.EgressNodeID, time.Now().UTC())
@@ -1787,6 +1827,11 @@ attemptLoop:
 			selected := fallback
 			fallback = nil
 			s.logger.Info("quality_degraded_fallback", "request_id", input.RequestID, "account_id", selected.credential.ID, "quality_attempts", qualityAccountAttempts)
+			if weightPending != nil && weightPending.account.ID != selected.credential.ID {
+				s.commitWeight(context.WithoutCancel(ctx), weightPending, "fail", 0)
+				weightPending = nil
+			}
+			weightDegraded = true
 			return handoffResponse(selected.response, selected.lease, selected.credential, selected.upstreamStartedAt), nil
 		}
 		return handoffResponse(response, lease, credential, responseStartedAt), nil
@@ -1796,6 +1841,11 @@ attemptLoop:
 			selected := fallback
 			fallback = nil
 			s.logger.Info("quality_degraded_fallback", "request_id", input.RequestID, "account_id", selected.credential.ID, "quality_attempts", qualityAccountAttempts)
+			if weightPending != nil && weightPending.account.ID != selected.credential.ID {
+				s.commitWeight(context.WithoutCancel(ctx), weightPending, "fail", 0)
+				weightPending = nil
+			}
+			weightDegraded = true
 			return handoffResponse(selected.response, selected.lease, selected.credential, selected.upstreamStartedAt), nil
 		}
 		discardFallback(true)

@@ -208,7 +208,6 @@ func mustUpsertLinked(t *testing.T, repo *relational.AccountRepository, value ac
 	value.EncryptedAccessToken = "encrypted"
 	value.Enabled = true
 	value.AuthStatus = accountdomain.AuthStatusActive
-	value.Priority = accountdomain.DefaultPriority
 	value.MaxConcurrent = accountdomain.DefaultMaxConcurrent
 	stored, _, err := repo.UpsertByIdentity(context.Background(), value)
 	if err != nil {

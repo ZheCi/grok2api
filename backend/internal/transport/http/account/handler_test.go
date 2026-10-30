@@ -248,7 +248,7 @@ func TestClearCooldownResetsHealthAndSelectorCache(t *testing.T) {
 	created, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 		Provider: accountdomain.ProviderBuild, Name: "cooled", SourceKey: "cooled",
 		EncryptedAccessToken: "token", Enabled: true, AuthStatus: accountdomain.AuthStatusActive,
-		Priority: 100, MaxConcurrent: 1,
+		MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -333,7 +333,7 @@ func TestBatchClearCooldownResetsSelectedAccounts(t *testing.T) {
 		created, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 			Provider: accountdomain.ProviderBuild, Name: name, SourceKey: source,
 			EncryptedAccessToken: "token", Enabled: true, AuthStatus: accountdomain.AuthStatusActive,
-			Priority: 100, MaxConcurrent: 1,
+			MaxConcurrent: 1,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -389,7 +389,7 @@ func TestUpdateCooldownWarningRequiresEnabledChange(t *testing.T) {
 	created, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 		Provider: accountdomain.ProviderBuild, Name: "cooled", SourceKey: "cooled-warning",
 		EncryptedAccessToken: "token", Enabled: true, AuthStatus: accountdomain.AuthStatusActive,
-		Priority: 100, MaxConcurrent: 1,
+		MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

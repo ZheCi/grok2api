@@ -83,7 +83,7 @@ func TestListCallQualityFilters(t *testing.T) {
 
 func createCallQualityAccount(t *testing.T, ctx context.Context, database *Database, source string, now time.Time) accountModel {
 	t.Helper()
-	value := accountModel{IdentityKey: testIdentityKey(source), Provider: "grok_build", Name: source, SourceKey: source, Enabled: true, AuthStatus: "active", Priority: 1}
+	value := accountModel{IdentityKey: testIdentityKey(source), Provider: "grok_build", Name: source, SourceKey: source, Enabled: true, AuthStatus: "active"}
 	if err := database.db.WithContext(ctx).Create(&value).Error; err != nil {
 		t.Fatal(err)
 	}

@@ -223,6 +223,13 @@ qualityGuard:
 	}
 }
 
+func TestAccountWeightWindowRejectsUnknown(t *testing.T) {
+	err := validateAccountWeight(AccountWeightConfig{Window: "12h", NewbieDays: 7, NewbieDailyBase: 20})
+	if err == nil || !strings.Contains(err.Error(), "window") {
+		t.Fatalf("window error = %v", err)
+	}
+}
+
 func TestDefaultQualityGuardRequestRetryContract(t *testing.T) {
 	t.Parallel()
 	got := defaultConfig().QualityGuard.RequestRetry

@@ -16,6 +16,7 @@ import (
 
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	accountsyncapp "github.com/chenyme/grok2api/backend/internal/application/accountsync"
+	"github.com/chenyme/grok2api/backend/internal/application/gateway"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
@@ -43,9 +44,15 @@ const (
 	accountEventWriteTimeout      = 30 * time.Second
 )
 
+type accountWeightSource interface {
+	AccountWeights(credentials []accountdomain.Credential) map[uint64]gateway.AccountWeightView
+	SetManualAccountWeight(ctx context.Context, credential accountdomain.Credential, weight *int) (gateway.AccountWeightView, error)
+}
+
 type Handler struct {
 	service *accountapp.Service
 	sync    accountSynchronizer
+	weights accountWeightSource
 }
 
 type accountSyncPipeline struct {
@@ -61,6 +68,11 @@ type accountSyncPipeline struct {
 
 func NewHandler(service *accountapp.Service, sync accountSynchronizer) *Handler {
 	return &Handler{service: service, sync: sync}
+}
+
+func (h *Handler) WithWeights(weights accountWeightSource) *Handler {
+	h.weights = weights
+	return h
 }
 
 func (h *Handler) startSyncPipeline(parent context.Context, progress func(completed, total int)) *accountSyncPipeline {
@@ -165,6 +177,7 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/accounts/deletion-preview", h.previewDeletion)
 	router.DELETE("/accounts", h.batchDelete)
 	router.PATCH("/accounts/:id", h.update)
+	router.PATCH("/accounts/:id/weight", h.updateWeight)
 	router.DELETE("/accounts/:id", h.delete)
 	router.POST("/accounts/:id/clear-cooldown", h.clearCooldown)
 	router.POST("/accounts/:id/refresh-token", h.refreshToken)
@@ -182,7 +195,6 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 type updateRequest struct {
 	Name                   *string                       `json:"name"`
 	Enabled                *bool                         `json:"enabled"`
-	Priority               *int                          `json:"priority"`
 	MaxConcurrent          *int                          `json:"maxConcurrent"`
 	MinimumRemaining       *float64                      `json:"minimumRemaining"`
 	CloudflareCookies      *string                       `json:"cloudflareCookies"`
@@ -195,7 +207,6 @@ type batchUpdateRequest struct {
 	IDs              []string `json:"ids" binding:"required"`
 	Provider         string   `json:"provider" binding:"required"`
 	Enabled          *bool    `json:"enabled"`
-	Priority         *int     `json:"priority"`
 	MaxConcurrent    *int     `json:"maxConcurrent"`
 	MinimumRemaining *float64 `json:"minimumRemaining"`
 }
@@ -310,9 +321,10 @@ type accountResponse struct {
 	LastRefreshError         string     `json:"lastRefreshErrorCode,omitempty"`
 	LastRefreshErrorMessage  string     `json:"lastRefreshErrorMessage,omitempty"`
 	LastRefreshErrorResponse string     `json:"lastRefreshErrorResponse,omitempty"`
-	Priority                 int        `json:"priority"`
 	MaxConcurrent            int        `json:"maxConcurrent"`
 	MinimumRemaining         float64    `json:"minimumRemaining"`
+	Weight                   int        `json:"weight"`
+	WeightManual             bool       `json:"weightManual"`
 	FailureCount             int        `json:"failureCount"`
 	CooldownUntil            *time.Time `json:"cooldownUntil,omitempty"`
 	LastError                string     `json:"lastError,omitempty"`
@@ -455,10 +467,7 @@ func (h *Handler) list(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "accountListFailed", "读取账号失败")
 		return
 	}
-	items := make([]accountResponse, 0, len(values))
-	for _, value := range values {
-		items = append(items, newAccountResponse(value))
-	}
+	items := h.presentAll(values)
 	response.Success(c, http.StatusOK, gin.H{"items": items, "page": page, "pageSize": pageSize, "total": total})
 }
 
@@ -516,7 +525,7 @@ func (h *Handler) batchUpdate(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
 	}
-	updated, err := h.service.BatchUpdate(c.Request.Context(), accountdomain.Provider(request.Provider), ids, accountapp.UpdateInput{Enabled: request.Enabled, Priority: request.Priority, MaxConcurrent: request.MaxConcurrent, MinimumRemaining: request.MinimumRemaining})
+	updated, err := h.service.BatchUpdate(c.Request.Context(), accountdomain.Provider(request.Provider), ids, accountapp.UpdateInput{Enabled: request.Enabled, MaxConcurrent: request.MaxConcurrent, MinimumRemaining: request.MinimumRemaining})
 	if err != nil {
 		h.writeServiceError(c, "accountBatchUpdateFailed", err, http.StatusInternalServerError, "批量更新账号失败")
 		return
@@ -823,7 +832,7 @@ func (h *Handler) get(c *gin.Context) {
 		h.writeServiceError(c, "accountGetFailed", err, http.StatusInternalServerError, "读取账号失败")
 		return
 	}
-	response.Success(c, http.StatusOK, newAccountResponse(value))
+	response.Success(c, http.StatusOK, h.present(value))
 }
 
 func (h *Handler) startDevice(c *gin.Context) {
@@ -861,7 +870,7 @@ func (h *Handler) pollDevice(c *gin.Context) {
 	if syncResult.Failed > 0 {
 		status = "syncFailed"
 	}
-	response.Success(c, http.StatusOK, gin.H{"status": status, "account": newAccountResponse(value), "synced": syncResult.Succeeded, "syncFailed": syncResult.Failed})
+	response.Success(c, http.StatusOK, gin.H{"status": status, "account": h.present(value), "synced": syncResult.Succeeded, "syncFailed": syncResult.Failed})
 }
 
 func (h *Handler) importAuth(c *gin.Context) {
@@ -1207,7 +1216,7 @@ func (h *Handler) refreshWebQuota(c *gin.Context) {
 		h.writeServiceError(c, "accountGetFailed", err, http.StatusInternalServerError, "读取账号失败")
 		return
 	}
-	response.Success(c, http.StatusOK, newAccountResponse(value))
+	response.Success(c, http.StatusOK, h.present(value))
 }
 
 func (h *Handler) exportCredentials(c *gin.Context) {
@@ -1300,7 +1309,7 @@ func (h *Handler) update(c *gin.Context) {
 		return
 	}
 	value, err := h.service.Update(c.Request.Context(), id, accountapp.UpdateInput{
-		Name: request.Name, Enabled: request.Enabled, Priority: request.Priority,
+		Name: request.Name, Enabled: request.Enabled,
 		MaxConcurrent: request.MaxConcurrent, MinimumRemaining: request.MinimumRemaining,
 		CloudflareCookies: request.CloudflareCookies, ClearCloudflareCookies: request.ClearCloudflareCookies,
 		BuildSuperEntitled: request.BuildSuperEntitled, BuildRouteMode: request.BuildRouteMode,
@@ -1309,7 +1318,7 @@ func (h *Handler) update(c *gin.Context) {
 		h.writeServiceError(c, "accountUpdateFailed", err, http.StatusInternalServerError, "更新账号失败")
 		return
 	}
-	result := newAccountResponse(value)
+	result := h.present(value)
 	if value.EnabledChanged && result.CooldownUntil != nil && time.Now().UTC().Before(*result.CooldownUntil) {
 		result.EnabledDoesNotClearCooldown = true
 	}
@@ -1331,7 +1340,7 @@ func (h *Handler) clearCooldown(c *gin.Context) {
 		h.writeServiceError(c, "accountClearCooldownFailed", err, http.StatusInternalServerError, "清除账号冷却失败")
 		return
 	}
-	response.Success(c, http.StatusOK, newAccountResponse(value))
+	response.Success(c, http.StatusOK, h.present(value))
 }
 
 func (h *Handler) delete(c *gin.Context) {
@@ -1451,7 +1460,7 @@ func (h *Handler) refreshToken(c *gin.Context) {
 		h.writeServiceError(c, "tokenRefreshFailed", err, http.StatusBadGateway, "刷新账号凭据失败")
 		return
 	}
-	response.Success(c, http.StatusOK, newAccountResponse(value))
+	response.Success(c, http.StatusOK, h.present(value))
 }
 
 func (h *Handler) acceptWebTerms(c *gin.Context) {
@@ -1547,6 +1556,66 @@ func (h *Handler) refreshAllConsoleQuotas(c *gin.Context) {
 	_ = stream.Write("complete", accountBatchResponse{Succeeded: succeeded, Failed: failed})
 }
 
+func (h *Handler) present(value accountapp.View) accountResponse {
+	return h.presentAll([]accountapp.View{value})[0]
+}
+
+func (h *Handler) presentAll(values []accountapp.View) []accountResponse {
+	weights := map[uint64]gateway.AccountWeightView{}
+	if h != nil && h.weights != nil && len(values) > 0 {
+		credentials := make([]accountdomain.Credential, len(values))
+		for index, value := range values {
+			credentials[index] = value.Credential
+		}
+		if loaded := h.weights.AccountWeights(credentials); loaded != nil {
+			weights = loaded
+		}
+	}
+	items := make([]accountResponse, 0, len(values))
+	for _, value := range values {
+		item := newAccountResponse(value)
+		if weight, ok := weights[value.Credential.ID]; ok {
+			item.Weight = weight.Weight
+			item.WeightManual = weight.Manual
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func (h *Handler) updateWeight(c *gin.Context) {
+	if h.weights == nil {
+		response.Error(c, http.StatusServiceUnavailable, "accountWeightUnavailable", "权重服务不可用")
+		return
+	}
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	var request struct {
+		Weight *int `json:"weight"`
+	}
+	if c.ShouldBindJSON(&request) != nil {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
+		return
+	}
+	if request.Weight != nil && (*request.Weight < 0 || *request.Weight > 100) {
+		response.Error(c, http.StatusBadRequest, "invalidWeight", "权重必须在 0 到 100 之间")
+		return
+	}
+	accountValue, err := h.service.Get(c.Request.Context(), id)
+	if err != nil {
+		h.writeServiceError(c, "accountWeightUpdateFailed", err, http.StatusInternalServerError, "读取账号失败")
+		return
+	}
+	view, err := h.weights.SetManualAccountWeight(c.Request.Context(), accountValue.Credential, request.Weight)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "accountWeightUpdateFailed", err.Error())
+		return
+	}
+	response.Success(c, http.StatusOK, gin.H{"weight": view.Weight, "weightManual": view.Manual})
+}
+
 func newAccountResponse(value accountapp.View) accountResponse {
 	c := value.Credential
 	buildRouteMode := c.BuildRouteMode
@@ -1559,7 +1628,7 @@ func newAccountResponse(value accountapp.View) accountResponse {
 		Enabled: c.Enabled, AuthStatus: string(c.AuthStatus), Refreshable: c.EncryptedRefreshToken != "",
 		RefreshDueAt: c.RefreshDueAt, LastRefreshAt: c.LastRefreshAt,
 		RefreshFailures: c.RefreshFailureCount, LastRefreshErrorStatus: c.LastRefreshErrorStatus, LastRefreshError: c.LastRefreshErrorCode, LastRefreshErrorMessage: c.LastRefreshErrorMessage, LastRefreshErrorResponse: c.LastRefreshErrorResponse,
-		Priority: c.Priority, MaxConcurrent: c.MaxConcurrent, MinimumRemaining: c.MinimumRemaining,
+		MaxConcurrent: c.MaxConcurrent, MinimumRemaining: c.MinimumRemaining,
 		FailureCount: c.FailureCount, CooldownUntil: c.CooldownUntil, LastError: c.LastError,
 		LastUsedAt: c.LastUsedAt, LinkedAccountID: c.LinkedAccountID, LinkedName: c.LinkedAccountName, LinkedProvider: string(c.LinkedProvider),
 		CreatedAt: c.CreatedAt, ObservedModel: c.ObservedModel, ObservedModelAt: c.ObservedModelAt,

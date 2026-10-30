@@ -966,7 +966,7 @@ func TestPostgresRoutingProjectionAndCredentialHydration(t *testing.T) {
 		SourceKey: "postgres-routing-projection-" + unique, OIDCClientID: "postgres-client",
 		EncryptedAccessToken: "postgres-access-secret", EncryptedCloudflareCookie: "postgres-cookie-secret",
 		ExpiresAt: now.Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
-		Priority: 7, MaxConcurrent: 3, MinimumRemaining: 1.5, WebTier: account.WebTierSuper,
+		MaxConcurrent: 3, MinimumRemaining: 1.5, WebTier: account.WebTierSuper,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -23,8 +23,8 @@ func TestInventoryHidesStockedAccountsFromScheduling(t *testing.T) {
 	}
 	repo := NewAccountRepository(database)
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
-	open := accountModel{IdentityKey: testIdentityKey("inventory-open"), Provider: "grok_build", Name: "open", SourceKey: "inventory-open", Enabled: true, AuthStatus: "active", Priority: 1, CreatedAt: now, UpdatedAt: now}
-	held := accountModel{IdentityKey: testIdentityKey("inventory-held"), Provider: "grok_build", Name: "held", SourceKey: "inventory-held", Enabled: true, AuthStatus: "active", Priority: 1, CreatedAt: now, UpdatedAt: now}
+	open := accountModel{IdentityKey: testIdentityKey("inventory-open"), Provider: "grok_build", Name: "open", SourceKey: "inventory-open", Enabled: true, AuthStatus: "active", CreatedAt: now, UpdatedAt: now}
+	held := accountModel{IdentityKey: testIdentityKey("inventory-held"), Provider: "grok_build", Name: "held", SourceKey: "inventory-held", Enabled: true, AuthStatus: "active", CreatedAt: now, UpdatedAt: now}
 	for _, row := range []*accountModel{&open, &held} {
 		if err := database.db.WithContext(ctx).Create(row).Error; err != nil {
 			t.Fatal(err)
@@ -117,7 +117,7 @@ func TestDeleteInventoryGroupKeepsDefaultAndOccupiedGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	held := accountModel{IdentityKey: testIdentityKey("inventory-delete"), Provider: "grok_build", Name: "held", SourceKey: "inventory-delete", Enabled: true, AuthStatus: "active", Priority: 1, CreatedAt: now, UpdatedAt: now}
+	held := accountModel{IdentityKey: testIdentityKey("inventory-delete"), Provider: "grok_build", Name: "held", SourceKey: "inventory-delete", Enabled: true, AuthStatus: "active", CreatedAt: now, UpdatedAt: now}
 	if err := database.db.WithContext(ctx).Create(&held).Error; err != nil {
 		t.Fatal(err)
 	}

@@ -32,7 +32,7 @@ func TestSchemaAndRepositoryConstraints(t *testing.T) {
 	}
 
 	accountRepo := NewAccountRepository(database)
-	value := account.Credential{Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, Name: "first", UserID: "user-1", SourceKey: "source", EncryptedAccessToken: "encrypted-a", EncryptedCloudflareCookie: "encrypted-cf", ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 100, MaxConcurrent: 4}
+	value := account.Credential{Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, Name: "first", UserID: "user-1", SourceKey: "source", EncryptedAccessToken: "encrypted-a", EncryptedCloudflareCookie: "encrypted-cf", ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 4}
 	created, wasCreated, err := accountRepo.UpsertByIdentity(context.Background(), value)
 	if err != nil || !wasCreated {
 		t.Fatalf("首次 upsert = %#v, %v, %v", created, wasCreated, err)
@@ -61,8 +61,8 @@ func TestAccountRepositoryAppliesRoutingDefaults(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("created = %v, err = %v", created, err)
 	}
-	if value.Priority != account.DefaultPriority || value.MaxConcurrent != account.DefaultMaxConcurrent || value.MinimumRemaining != account.DefaultMinimumRemaining {
-		t.Fatalf("routing defaults = priority %d, concurrency %d, minimum %v", value.Priority, value.MaxConcurrent, value.MinimumRemaining)
+	if value.MaxConcurrent != account.DefaultMaxConcurrent || value.MinimumRemaining != account.DefaultMinimumRemaining {
+		t.Fatalf("routing defaults = concurrency %d, minimum %v", value.MaxConcurrent, value.MinimumRemaining)
 	}
 }
 
@@ -91,7 +91,7 @@ func TestAccountRepositoryUpsertsImportChunkInOneBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored.Priority = 99
+	stored.MaxConcurrent = 3
 	if _, err := repo.Update(ctx, stored); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestAccountRepositoryUpsertsImportChunkInOneBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Name != "batch-1-updated" || stored.Priority != 99 {
+	if stored.Name != "batch-1-updated" || stored.MaxConcurrent != 3 {
 		t.Fatalf("stored = %#v", stored)
 	}
 }

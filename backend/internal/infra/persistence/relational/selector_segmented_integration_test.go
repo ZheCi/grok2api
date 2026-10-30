@@ -53,7 +53,7 @@ func TestPostgresRedisSegmentedSelectorIntegration(t *testing.T) {
 		values[index] = account.Credential{
 			Provider: account.ProviderBuild, Name: fmt.Sprintf("p4-%04d", index+1),
 			SourceKey: identityPrefix + "-" + strconv.Itoa(index+1), EncryptedAccessToken: "encrypted",
-			AuthStatus: account.AuthStatusActive, Priority: 1_000_000, MaxConcurrent: 1,
+			AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
 		}
 	}
 	created, err := accounts.UpsertManyByIdentity(ctx, values)

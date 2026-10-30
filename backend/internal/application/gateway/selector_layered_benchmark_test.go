@@ -33,7 +33,7 @@ func BenchmarkSelectorMultiModelCandidateLoad(b *testing.B) {
 		credentials[index] = account.Credential{
 			Provider: account.ProviderBuild, Name: fmt.Sprintf("benchmark-%04d", index),
 			SourceKey: fmt.Sprintf("benchmark-source-%04d", index), EncryptedAccessToken: "encrypted",
-			AuthStatus: account.AuthStatusActive, Priority: account.DefaultPriority, MaxConcurrent: account.DefaultMaxConcurrent,
+			AuthStatus: account.AuthStatusActive, MaxConcurrent: account.DefaultMaxConcurrent,
 		}
 	}
 	created, err := accounts.UpsertManyByIdentity(ctx, credentials)

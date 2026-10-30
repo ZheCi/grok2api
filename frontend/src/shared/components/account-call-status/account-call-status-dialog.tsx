@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Compass, MoreHorizontal, Power, PowerOff, RefreshCw, RotateCw, SquareTerminal, TimerOff, Webhook } from "lucide-react";
+import { Compass, Gauge, MoreHorizontal, Power, PowerOff, RefreshCw, RotateCw, SquareTerminal, TimerOff, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { AccountWeightDialog } from "@/features/accounts/account-weight-dialog";
 import { AccountQuota, ConsoleQuota, WebQuota } from "@/features/accounts/account-quota";
 import { clearAccountCooldown, listAccounts, refreshAccountBilling, refreshAccountQuota, refreshAccountToken, updateAccountsEnabled, type AccountDTO, type AccountProvider } from "@/features/accounts/accounts-api";
 import { RequestAuditDetailDialog } from "@/features/audits/request-audit-detail-dialog";
@@ -155,6 +156,7 @@ const providerIcon: Record<AccountProvider, { icon: typeof SquareTerminal; class
 
 function AccountHeader({ account, locale, busy, onChanged }: { account: AccountDTO; locale: string; busy?: boolean; onChanged: () => void }) {
   const { t } = useTranslation();
+  const [weightOpen, setWeightOpen] = useState(false);
   const cooling = Boolean(account.cooldownUntil && new Date(account.cooldownUntil) > new Date());
   const identity = account.email?.trim() || account.name;
   const links = [
@@ -215,6 +217,7 @@ function AccountHeader({ account, locale, busy, onChanged }: { account: AccountD
             ? <ConsoleQuota windows={account.quotaWindows ?? []} locale={locale} />
             : <AccountQuota quota={account.quota} billing={account.billing} locale={locale} />}
       </div>
+      <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">{t("accounts.weight")} {account.weight}</span>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0" disabled={pending} aria-label={t("common.actions")}>
@@ -222,6 +225,9 @@ function AccountHeader({ account, locale, busy, onChanged }: { account: AccountD
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="z-[70]">
+          <DropdownMenuItem disabled={pending} onClick={() => setWeightOpen(true)}>
+            <Gauge />{t("accounts.editWeight")}
+          </DropdownMenuItem>
           {cooling ? (
             <DropdownMenuItem disabled={pending} onClick={() => cooldownMutation.mutate()}>
               <TimerOff />{t("accounts.clearCooldown")}
@@ -241,6 +247,7 @@ function AccountHeader({ account, locale, busy, onChanged }: { account: AccountD
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+      <AccountWeightDialog account={account} open={weightOpen} onOpenChange={setWeightOpen} onSaved={onChanged} />
     </div>
   );
 }
