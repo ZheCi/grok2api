@@ -298,6 +298,10 @@ type QualityGuardRequestRetryConfig struct {
 	// AutoDisable also enables request-path detection without changing Enabled.
 	AutoDisable     bool     `yaml:"autoDisable"`
 	AccountCooldown Duration `yaml:"accountCooldown"`
+	// DegradeCooldownAfter is how many consecutive quality withholds on one
+	// account are required before that account enters cooldown. 0 or 1 cools
+	// on the first withhold. A delivered success resets the streak.
+	DegradeCooldownAfter int `yaml:"degradeCooldownAfter"`
 	// IdleAccountCooldown cools an account after a truly empty upstream
 	// stream. Independent of accountCooldown (missing-thinking). Zero uses 15m.
 	IdleAccountCooldown             Duration `yaml:"idleAccountCooldown"`
@@ -838,6 +842,9 @@ func validateQualityGuardRequestRetry(value QualityGuardRequestRetryConfig) erro
 	}
 	if value.EncryptedBytesPerReasoningToken != 0 && (value.EncryptedBytesPerReasoningToken < 1 || value.EncryptedBytesPerReasoningToken > 16) {
 		return errors.New("qualityGuard.requestRetry.encryptedBytesPerReasoningToken 必须在 1 到 16 之间")
+	}
+	if value.DegradeCooldownAfter < 0 || value.DegradeCooldownAfter > 32 {
+		return errors.New("qualityGuard.requestRetry.degradeCooldownAfter 必须在 0 到 32 之间")
 	}
 	if value.WindowFailures < 0 || value.WindowFailures > 32 {
 		return errors.New("qualityGuard.requestRetry.windowFailures 必须在 0 到 32 之间")

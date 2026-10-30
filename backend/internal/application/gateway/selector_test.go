@@ -1611,7 +1611,7 @@ func TestMarkMissingThinkingCoolsThenDisables(t *testing.T) {
 	}
 	selector := NewSelector(accounts, memory.NewConcurrencyLimiter(), memory.NewStickyStore(), nil, time.Hour, 30*time.Second, 30*time.Minute, 500*time.Millisecond)
 	before := time.Now().UTC()
-	if action, err := selector.markMissingThinking(ctx, credential, time.Hour, false); err != nil || action != missingThinkingPenaltyCooled {
+	if action, err := selector.markMissingThinking(ctx, credential, time.Hour, false, 1); err != nil || action != missingThinkingPenaltyCooled {
 		t.Fatalf("first penalty = (%s, %v)", action, err)
 	}
 	first, err := accounts.Get(ctx, credential.ID)
@@ -1624,7 +1624,7 @@ func TestMarkMissingThinkingCoolsThenDisables(t *testing.T) {
 	if wait := first.CooldownUntil.Sub(before); wait < 50*time.Minute || wait > 70*time.Minute {
 		t.Fatalf("first cooldown = %s", wait)
 	}
-	if action, err := selector.markMissingThinking(ctx, first, time.Hour, false); err != nil || action != missingThinkingPenaltyUnchanged {
+	if action, err := selector.markMissingThinking(ctx, first, time.Hour, false, 1); err != nil || action != missingThinkingPenaltyUnchanged {
 		t.Fatalf("in-cooldown penalty = (%s, %v)", action, err)
 	}
 	stillCooling, err := accounts.Get(ctx, credential.ID)
@@ -1636,7 +1636,7 @@ func TestMarkMissingThinkingCoolsThenDisables(t *testing.T) {
 	}
 	expired := time.Now().UTC().Add(-time.Second)
 	stillCooling.CooldownUntil = &expired
-	if action, err := selector.markMissingThinking(ctx, stillCooling, time.Hour, false); err != nil || action != missingThinkingPenaltyDisabled {
+	if action, err := selector.markMissingThinking(ctx, stillCooling, time.Hour, false, 1); err != nil || action != missingThinkingPenaltyDisabled {
 		t.Fatalf("second penalty = (%s, %v)", action, err)
 	}
 	second, err := accounts.Get(ctx, credential.ID)
@@ -1657,7 +1657,7 @@ func TestMarkMissingThinkingCoolsThenDisables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if action, err := selector.markMissingThinking(ctx, ok, time.Hour, false); err != nil || action != missingThinkingPenaltyCooled {
+	if action, err := selector.markMissingThinking(ctx, ok, time.Hour, false, 1); err != nil || action != missingThinkingPenaltyCooled {
 		t.Fatalf("recovery penalty = (%s, %v)", action, err)
 	}
 	cooled, err := accounts.Get(ctx, ok.ID)
@@ -1680,7 +1680,7 @@ func TestMarkMissingThinkingCoolsThenDisables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if action, err := selector.markMissingThinking(ctx, immediate, time.Hour, true); err != nil || action != missingThinkingPenaltyDisabled {
+	if action, err := selector.markMissingThinking(ctx, immediate, time.Hour, true, 1); err != nil || action != missingThinkingPenaltyDisabled {
 		t.Fatalf("auto-disable penalty = (%s, %v)", action, err)
 	}
 	disabled, err := accounts.Get(ctx, immediate.ID)
@@ -1689,6 +1689,71 @@ func TestMarkMissingThinkingCoolsThenDisables(t *testing.T) {
 	}
 	if disabled.Enabled || disabled.LastError != lastErrorMissingThinkingDisabled || disabled.CooldownUntil != nil {
 		t.Fatalf("auto-disable first strike = %#v", disabled)
+	}
+}
+
+func TestMarkMissingThinkingWaitsForConfiguredStreak(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "missing-thinking-streak.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accounts := relational.NewAccountRepository(database)
+	credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
+		Provider: account.ProviderBuild, Name: "streak", SourceKey: "streak", EncryptedAccessToken: "encrypted", Enabled: true,
+		AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector := NewSelector(accounts, memory.NewConcurrencyLimiter(), memory.NewStickyStore(), nil, time.Hour, 30*time.Second, 30*time.Minute, 500*time.Millisecond)
+	for want := 1; want <= 2; want++ {
+		if action, err := selector.markMissingThinking(ctx, credential, time.Hour, false, 3); err != nil || action != missingThinkingPenaltyCounted {
+			t.Fatalf("strike %d = (%s, %v)", want, action, err)
+		}
+		credential, err = accounts.Get(ctx, credential.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !credential.Enabled || credential.CooldownUntil != nil || credential.LastError != account.LastErrorDegradeStreak || credential.FailureCount != want {
+			t.Fatalf("strike %d stored %#v", want, credential)
+		}
+	}
+	selector.MarkSuccess(ctx, credential)
+	credential, err = accounts.Get(ctx, credential.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.FailureCount != 0 || credential.LastError != "" || credential.CooldownUntil != nil {
+		t.Fatalf("success must reset the streak, got %#v", credential)
+	}
+	if action, err := selector.markMissingThinking(ctx, credential, time.Hour, false, 3); err != nil || action != missingThinkingPenaltyCounted {
+		t.Fatalf("streak after success = (%s, %v)", action, err)
+	}
+	credential, err = accounts.Get(ctx, credential.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action, err := selector.markMissingThinking(ctx, credential, time.Hour, false, 3); err != nil || action != missingThinkingPenaltyCounted {
+		t.Fatalf("second strike = (%s, %v)", action, err)
+	}
+	credential, err = accounts.Get(ctx, credential.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action, err := selector.markMissingThinking(ctx, credential, time.Hour, false, 3); err != nil || action != missingThinkingPenaltyCooled {
+		t.Fatalf("third strike = (%s, %v)", action, err)
+	}
+	cooled, err := accounts.Get(ctx, credential.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cooled.Enabled || cooled.CooldownUntil == nil || cooled.LastError != account.LastErrorMissingThinking || cooled.FailureCount != 0 {
+		t.Fatalf("cooldown strike = %#v", cooled)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -49,6 +50,12 @@ const (
 	maxStreamResponseTransferBytes  = 256 << 20
 	maxMediaResponseTransferBytes   = int64(2) << 30
 	responseWriteTimeout            = 30 * time.Second
+	// grok-shell drops a silent socket at 20s. Quality hold often has no
+	// deliverable byte by then, so a comment goes out first. 8s leaves room
+	// for a proxy to flush before that cutoff.
+	streamKeepaliveFirst   = 8 * time.Second
+	streamKeepaliveEvery   = 8 * time.Second
+	streamKeepaliveComment = ": ping\n\n"
 )
 
 var (
@@ -321,15 +328,17 @@ func (h *Handler) createChatCompletion(c *gin.Context) {
 	}
 	requestID, _ := c.Get(middleware.RequestIDKey)
 	requestIDValue, _ := requestID.(string)
-	result, err := h.gateway.CreateChatCompletion(withStreamingHoldKeepalive(c, request.Stream), gateway.Input{
-		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
-		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
-		PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, body),
-		AllowClientToolCacheRoute: allowBuildClientToolCacheRoute(c.Request.Header),
-		GrokTurnIndex:             c.GetHeader("x-grok-turn-idx"),
-		Method:                    c.Request.Method,
-		Path:                      c.Request.URL.Path,
-		Headers:                   c.Request.Header.Clone(),
+	result, err := callWithStreamKeepalive(c, request.Stream, func() (*gateway.Result, error) {
+		return h.gateway.CreateChatCompletion(c.Request.Context(), gateway.Input{
+			RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
+			Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
+			PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, body),
+			AllowClientToolCacheRoute: allowBuildClientToolCacheRoute(c.Request.Header),
+			GrokTurnIndex:             c.GetHeader("x-grok-turn-idx"),
+			Method:                    c.Request.Method,
+			Path:                      c.Request.URL.Path,
+			Headers:                   c.Request.Header.Clone(),
+		})
 	})
 	if err != nil {
 		writeGatewayError(c, err)
@@ -366,15 +375,17 @@ func (h *Handler) createMessage(c *gin.Context) {
 	}
 	requestID, _ := c.Get(middleware.RequestIDKey)
 	requestIDValue, _ := requestID.(string)
-	result, err := h.gateway.CreateMessage(withStreamingHoldKeepalive(c, request.Stream), gateway.Input{
-		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
-		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
-		PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, body),
-		AllowClientToolCacheRoute: allowBuildClientToolCacheRoute(c.Request.Header),
-		GrokTurnIndex:             c.GetHeader("x-grok-turn-idx"),
-		Method:                    c.Request.Method,
-		Path:                      c.Request.URL.Path,
-		Headers:                   c.Request.Header.Clone(),
+	result, err := callWithStreamKeepalive(c, request.Stream, func() (*gateway.Result, error) {
+		return h.gateway.CreateMessage(c.Request.Context(), gateway.Input{
+			RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
+			Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
+			PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, body),
+			AllowClientToolCacheRoute: allowBuildClientToolCacheRoute(c.Request.Header),
+			GrokTurnIndex:             c.GetHeader("x-grok-turn-idx"),
+			Method:                    c.Request.Method,
+			Path:                      c.Request.URL.Path,
+			Headers:                   c.Request.Header.Clone(),
+		})
 	})
 	if err != nil {
 		writeGatewayAnthropicError(c, err)
@@ -527,32 +538,6 @@ func setSafeMediaResponseHeaders(c *gin.Context, upstream http.Header) {
 		if value := strings.TrimSpace(upstream.Get(name)); value != "" {
 			c.Header(name, value)
 		}
-	}
-}
-
-func withStreamingHoldKeepalive(c *gin.Context, stream bool) context.Context {
-	if !stream {
-		return c.Request.Context()
-	}
-	return gateway.WithStreamKeepalive(c.Request.Context(), newStreamingHoldKeepalive(c))
-}
-
-func newStreamingHoldKeepalive(c *gin.Context) func() {
-	return func() {
-		if !c.Writer.Written() {
-			header := c.Writer.Header()
-			header.Set("Content-Type", "text/event-stream; charset=utf-8")
-			header.Set("Cache-Control", "no-cache")
-			header.Set("X-Accel-Buffering", "no")
-			c.Status(http.StatusOK)
-		}
-		if err := setResponseWriteDeadline(c.Writer); err != nil {
-			return
-		}
-		if _, err := c.Writer.Write([]byte(": ping\n\n")); err != nil {
-			return
-		}
-		c.Writer.Flush()
 	}
 }
 
@@ -1191,17 +1176,95 @@ func (h *Handler) handleCreate(c *gin.Context, compact bool) {
 		Headers:                   c.Request.Header.Clone(),
 	}
 	var result *gateway.Result
-	ctx := withStreamingHoldKeepalive(c, request.Stream && !compact)
-	if compact {
-		result, err = h.gateway.CompactResponse(ctx, input)
-	} else {
-		result, err = h.gateway.CreateResponse(ctx, input)
-	}
+	ctx := c.Request.Context()
+	result, err = callWithStreamKeepalive(c, request.Stream && !compact, func() (*gateway.Result, error) {
+		if compact {
+			return h.gateway.CompactResponse(ctx, input)
+		}
+		return h.gateway.CreateResponse(ctx, input)
+	})
 	if err != nil {
 		writeGatewayError(c, err)
 		return
 	}
 	h.writeResponsesResult(c, result, request.Stream && !compact, request.Model)
+}
+
+// callWithStreamKeepalive keeps a streaming client past the 20s first-byte
+// cutoff while the gateway is still inside the quality hold. stop returns
+// only after the writer is idle, so the real body or error is not written
+// concurrently. A request that finishes before the first comment still gets
+// its original status code.
+func callWithStreamKeepalive(c *gin.Context, stream bool, call func() (*gateway.Result, error)) (*gateway.Result, error) {
+	if !stream {
+		return call()
+	}
+	stop := startStreamKeepalive(c)
+	defer stop()
+	return call()
+}
+
+func startStreamKeepalive(c *gin.Context) func() {
+	return startStreamKeepaliveAfter(c, streamKeepaliveFirst, streamKeepaliveEvery)
+}
+
+func startStreamKeepaliveAfter(c *gin.Context, first, every time.Duration) func() {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	var once sync.Once
+	go func() {
+		defer close(done)
+		timer := time.NewTimer(first)
+		defer timer.Stop()
+		select {
+		case <-stop:
+			return
+		case <-c.Request.Context().Done():
+			return
+		case <-timer.C:
+		}
+		if !writeStreamKeepalive(c) || every <= 0 {
+			return
+		}
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-c.Request.Context().Done():
+				return
+			case <-ticker.C:
+				if !writeStreamKeepalive(c) {
+					return
+				}
+			}
+		}
+	}()
+	return func() {
+		once.Do(func() { close(stop) })
+		<-done
+	}
+}
+
+func writeStreamKeepalive(c *gin.Context) bool {
+	if c.Request.Context().Err() != nil {
+		return false
+	}
+	if !c.Writer.Written() {
+		header := c.Writer.Header()
+		if header.Get("Content-Type") == "" {
+			header.Set("Content-Type", "text/event-stream")
+		}
+		header.Set("Cache-Control", "no-cache")
+		header.Set("X-Accel-Buffering", "no")
+		c.Status(http.StatusOK)
+	}
+	if _, err := c.Writer.Write([]byte(streamKeepaliveComment)); err != nil {
+		return false
+	}
+	c.Writer.Flush()
+	return true
 }
 
 func isJSONRequest(c *gin.Context) bool {

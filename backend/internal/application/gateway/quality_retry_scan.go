@@ -21,6 +21,9 @@ const (
 	qualityReasoningSSEComment         = ": grok2api-reasoning-start"
 	qualityReasoningEvidenceSSEComment = ": grok2api-reasoning-evidence"
 	qualityHoldMaxBufferBytes          = 4 << 20
+	// Same cap as a Build SSE event. A line under this stays intact until its
+	// newline; only a larger incomplete line is dropped.
+	qualityMaxSSELineBytes = 8 << 20
 )
 
 type qualityScanState struct {
@@ -39,6 +42,8 @@ type qualityScanState struct {
 	usage                           Usage
 	responseID                      string
 	terminal                        bool
+	upstreamFailed                  bool
+	failedPayload                   []byte
 	holdExpired                     bool
 	firstVisibleAt                  time.Time
 }
@@ -183,7 +188,7 @@ func ObserveQualityChunk(state *qualityScanState, chunk []byte) {
 	for {
 		index := bytes.IndexByte(state.pending, '\n')
 		if index < 0 {
-			if len(state.pending) > 1<<20 {
+			if len(state.pending) > qualityMaxSSELineBytes {
 				state.pending = nil
 			}
 			return
@@ -339,8 +344,14 @@ func observeQualityResponses(state *qualityScanState, payload []byte) {
 		return
 	}
 	switch event.Type {
-	case "response.completed", "response.incomplete", "response.failed":
+	case "response.completed", "response.incomplete":
 		state.terminal = true
+	case "response.failed":
+		state.terminal = true
+		state.upstreamFailed = true
+		if len(payload) <= 4096 {
+			state.failedPayload = append([]byte(nil), payload...)
+		}
 	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
 		if strings.TrimSpace(event.Delta) != "" {
 			state.hasThinking = true
@@ -507,13 +518,6 @@ func peekQualityStream(ctx context.Context, body io.ReadCloser, protocol string,
 	var held bytes.Buffer
 	holdTimer := time.NewTimer(cfg.HoldTimeout)
 	defer holdTimer.Stop()
-	notifyStreamKeepalive(ctx)
-	var keepaliveTick <-chan time.Time
-	if streamKeepaliveFunc(ctx) != nil {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		keepaliveTick = ticker.C
-	}
 	for {
 		sig := state.signals()
 		if verdict := ClassifyQualityHold(sig, cfg.MinOutputTokens); verdict != QualityWait {
@@ -527,9 +531,6 @@ func peekQualityStream(ctx context.Context, body io.ReadCloser, protocol string,
 		}
 
 		select {
-		case <-keepaliveTick:
-			notifyStreamKeepalive(ctx)
-			continue
 		case <-ctx.Done():
 			_ = pump.Close()
 			return io.NopCloser(bytes.NewReader(held.Bytes())), QualityWait, state.usage, state.responseID, qualityPeekAbortError(ctx, ctx.Err())
@@ -583,6 +584,9 @@ func finishQualityPeek(held *bytes.Buffer, pump *qualityReadPump, state *quality
 		if state.semanticOutput {
 			return newPrefixReplay(held, pump), QualityDeliver, state.usage, state.responseID, nil
 		}
+		if state.upstreamFailed {
+			return newPrefixReplay(held, pump), QualityWait, state.usage, state.responseID, &qualityStreamFailedError{payload: state.failedPayload}
+		}
 		return newPrefixReplay(held, pump), QualityWait, state.usage, state.responseID, errQualityEmptyStream
 	}
 	return newPrefixReplay(held, pump), ClassifyQualityHold(signals, cfg.MinOutputTokens), state.usage, state.responseID, nil
@@ -596,63 +600,4 @@ func newPrefixReplay(held *bytes.Buffer, rest io.ReadCloser) io.ReadCloser {
 		return rest
 	}
 	return &replayReadCloser{Reader: io.MultiReader(bytes.NewReader(held.Bytes()), rest), source: rest}
-}
-
-type streamKeepaliveContextKey struct{}
-
-// WithStreamKeepalive attaches a callback for a streaming quality hold.
-// Public proxies drop a response that stays silent for about 20s; the callback
-// writes an SSE comment so the first byte goes out while the body is still held.
-func WithStreamKeepalive(ctx context.Context, fn func()) context.Context {
-	if ctx == nil || fn == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, streamKeepaliveContextKey{}, fn)
-}
-
-func streamKeepaliveFunc(ctx context.Context) func() {
-	if ctx == nil {
-		return nil
-	}
-	fn, _ := ctx.Value(streamKeepaliveContextKey{}).(func())
-	return fn
-}
-
-func notifyStreamKeepalive(ctx context.Context) {
-	if fn := streamKeepaliveFunc(ctx); fn != nil {
-		fn()
-	}
-}
-
-// startStreamRequestKeepalive writes the first SSE comment before the upstream
-// POST returns. Quality peek has its own keepalive, so stop this one before
-// reading the response body.
-func startStreamRequestKeepalive(ctx context.Context) func() {
-	fn := streamKeepaliveFunc(ctx)
-	if fn == nil {
-		return func() {}
-	}
-	fn()
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				fn()
-			}
-		}
-	}()
-	var once sync.Once
-	return func() {
-		once.Do(func() { close(stop) })
-		<-done
-	}
 }

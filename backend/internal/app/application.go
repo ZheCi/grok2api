@@ -510,6 +510,7 @@ func qualityRetryRuntime(value config.QualityGuardConfig) gateway.QualityRetryRu
 		OnExhausted:                     retry.OnExhausted,
 		AutoDisable:                     retry.AutoDisable,
 		AccountCooldown:                 retry.AccountCooldown.Value(),
+		DegradeCooldownAfter:            retry.DegradeCooldownAfter,
 		IdleAccountCooldown:             retry.IdleAccountCooldown.Value(),
 		MinEncryptedBytes:               retry.MinEncryptedBytes,
 		EncryptedBytesPerReasoningToken: retry.EncryptedBytesPerReasoningToken,

@@ -248,11 +248,12 @@ func TestNonAccountFailureFingerprintStopsAtLimit(t *testing.T) {
 	if shouldStopForNonAccountFingerprint(idleFingerprints, idle) {
 		t.Fatal("the first stream idle failure should allow one compensating account switch")
 	}
-	if !shouldStopForNonAccountFingerprint(idleFingerprints, idle) {
-		t.Fatalf("stream idle failures should stop after %d attempts", streamIdleFailureFingerprintLimit)
+	empty := &UpstreamFailure{Code: "upstream_stream_empty", Fingerprint: "upstream_stream_empty"}
+	if !shouldStopForNonAccountFingerprint(idleFingerprints, empty) {
+		t.Fatal("empty and idle must share one stop counter")
 	}
-	if idleFingerprints[idle.Fingerprint] != streamIdleFailureFingerprintLimit {
-		t.Fatalf("idle fingerprint count = %d", idleFingerprints[idle.Fingerprint])
+	if idleFingerprints[streamStallFingerprint] != streamIdleFailureFingerprintLimit {
+		t.Fatalf("stall fingerprint count = %d", idleFingerprints[streamStallFingerprint])
 	}
 }
 

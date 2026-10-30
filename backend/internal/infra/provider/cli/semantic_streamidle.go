@@ -18,6 +18,7 @@ var buildGeneratedDeltaEvents = map[string]struct{}{
 	"response.refusal.delta":                 {},
 	"response.function_call_arguments.delta": {},
 	"response.custom_tool_call_input.delta":  {},
+	"response.mcp_call_arguments.delta":      {},
 }
 
 var buildGeneratedOutputItemTypes = map[string]struct{}{

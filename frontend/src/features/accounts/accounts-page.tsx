@@ -38,6 +38,7 @@ import {
   acceptWebAccountTerms,
   cleanupAccounts,
   clearAccountCooldown,
+  clearAccountsCooldown,
   deleteAccount,
   deleteAccounts,
   previewAccountDeletion,
@@ -557,6 +558,16 @@ export function AccountsPage() {
     onSuccess: () => {
       invalidateAccountData();
       toast.success(t("accounts.cooldownCleared"));
+    },
+    onError: showError,
+  });
+
+  const batchClearCooldownMutation = useMutation({
+    mutationFn: () => clearAccountsCooldown([...selected], provider),
+    onSuccess: (result) => {
+      clearSelection();
+      invalidateAccountData();
+      toast.success(t("accounts.batchCooldownCleared", { count: result.cleared }));
     },
     onError: showError,
   });
@@ -1318,6 +1329,7 @@ export function AccountsPage() {
     || batchQuotaResetMutation.isPending
     || batchTokenMutation.isPending
     || batchDeleteMutation.isPending
+    || batchClearCooldownMutation.isPending
     || bindEgressMutation.isPending
     || unbindEgressMutation.isPending
     || cleanupMutation.isPending
@@ -1486,6 +1498,7 @@ export function AccountsPage() {
                 <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={openSelectedExport}><Download />{t("accounts.exportAuth")}</Button>
                 <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => batchUpdateMutation.mutate(true)}>{t("common.enable")}</Button>
                 <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => batchUpdateMutation.mutate(false)}>{t("common.disable")}</Button>
+                <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => batchClearCooldownMutation.mutate()}><TimerOff />{t("accounts.clearCooldown")}</Button>
                 <Button variant="secondary" size="sm" disabled={bulkTaskPending} onClick={() => {
                   setBatchMaxConcurrent("1");
                   setBatchConcurrencyOpen(true);

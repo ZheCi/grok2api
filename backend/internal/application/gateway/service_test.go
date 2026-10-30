@@ -4817,7 +4817,7 @@ func TestBuildOriginTLSFailureIsNotRetryable(t *testing.T) {
 }
 
 func TestIsBuildTransientRetryErrorExcludesSemanticFailures(t *testing.T) {
-	for _, err := range []error{neterrorpkg.ErrUpstreamResponseEmpty, errQualityEmptyStream} {
+	for _, err := range []error{neterrorpkg.ErrUpstreamResponseEmpty, errQualityEmptyStream, &qualityStreamFailedError{}} {
 		if isBuildTransientRetryError(err) {
 			t.Fatalf("semantic failure %v must not count as a transient retry", err)
 		}

@@ -1566,6 +1566,49 @@ func TestCopyStreamRequiresProtocolTerminalEvent(t *testing.T) {
 	}
 }
 
+func TestStreamKeepaliveStaysSilentUntilFirstDelay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	stop := startStreamKeepaliveAfter(c, time.Hour, time.Hour)
+	stop()
+	if c.Writer.Written() || recorder.Body.Len() != 0 {
+		t.Fatalf("early keepalive wrote status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestStreamKeepaliveThenErrorStaysOnOpenStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	stop := startStreamKeepaliveAfter(c, 15*time.Millisecond, time.Hour)
+	time.Sleep(80 * time.Millisecond)
+	stop()
+	writeOpenAIError(c, http.StatusBadGateway, "upstream_stream_failed", "上游流式响应失败")
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || !strings.Contains(body, ": ping\n\n") || !strings.Contains(body, "upstream_stream_failed") {
+		t.Fatalf("status=%d body=%q", recorder.Code, body)
+	}
+}
+
+func TestWriteGatewayErrorBeforeHeadersKeepsStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	writeGatewayError(c, &gateway.UpstreamFailure{
+		HTTPStatus: http.StatusBadGateway, Code: "upstream_stream_failed", PublicMessage: "上游流式响应失败",
+	})
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "[DONE]") || strings.Contains(recorder.Body.String(), ": ping") {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
 func TestWriteResultRecordsStreamFailureDiagnostic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := NewHandler(nil, nil, 1<<20)

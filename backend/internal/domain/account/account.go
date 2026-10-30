@@ -116,6 +116,9 @@ const (
 const (
 	LastErrorMissingThinking         = "missing_thinking"
 	LastErrorMissingThinkingDisabled = "missing_thinking_disabled"
+	// LastErrorDegradeStreak counts consecutive quality withholds that have
+	// not yet reached the cooldown threshold. It is not a disable strike.
+	LastErrorDegradeStreak = "degrade_streak"
 )
 
 // LastErrorConsoleUnlinked is the reauth reason recorded for grok_console
@@ -126,7 +129,7 @@ const LastErrorConsoleUnlinked = "grok_console account has no credits or license
 // NormalizeHealthMarker admits only durable non-sensitive health markers.
 func NormalizeHealthMarker(value string) string {
 	switch value {
-	case LastErrorMissingThinking, LastErrorMissingThinkingDisabled:
+	case LastErrorMissingThinking, LastErrorMissingThinkingDisabled, LastErrorDegradeStreak:
 		return value
 	default:
 		return ""

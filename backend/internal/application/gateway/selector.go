@@ -1139,6 +1139,7 @@ type missingThinkingPenaltyResult string
 
 const (
 	missingThinkingPenaltyUnchanged missingThinkingPenaltyResult = "unchanged"
+	missingThinkingPenaltyCounted   missingThinkingPenaltyResult = "counted"
 	missingThinkingPenaltyCooled    missingThinkingPenaltyResult = "cooled"
 	missingThinkingPenaltyDisabled  missingThinkingPenaltyResult = "disabled"
 )
@@ -1336,11 +1337,16 @@ func (s *Selector) clearQuotaConsumptionAccount(provider account.Provider, accou
 	s.quotaMu.Unlock()
 }
 
-// markMissingThinking disables immediately when configured; otherwise it
-// cools the first no-thinking hit and disables a later hit after the cooldown.
-func (s *Selector) markMissingThinking(ctx context.Context, credential account.Credential, cooldown time.Duration, autoDisable bool) (missingThinkingPenaltyResult, error) {
+// markMissingThinking disables immediately when configured. Otherwise it
+// counts consecutive withholds and cools the account once the streak reaches
+// after. A later withhold after that cooldown expires still disables.
+// after below 2 cools on the first withhold.
+func (s *Selector) markMissingThinking(ctx context.Context, credential account.Credential, cooldown time.Duration, autoDisable bool, after int) (missingThinkingPenaltyResult, error) {
 	if cooldown <= 0 {
 		cooldown = defaultMissingThinkingCooldown
+	}
+	if after < 2 {
+		after = 1
 	}
 	now := time.Now().UTC()
 	inCooldown := credential.CooldownUntil != nil && now.Before(*credential.CooldownUntil)
@@ -1354,13 +1360,28 @@ func (s *Selector) markMissingThinking(ctx context.Context, credential account.C
 	if inCooldown {
 		return missingThinkingPenaltyUnchanged, nil
 	}
+	streak := 0
+	if credential.LastError == account.LastErrorDegradeStreak {
+		streak = credential.FailureCount
+	}
+	streak++
+	if streak < after {
+		if err := s.accounts.UpdateHealth(ctx, credential.ID, credential.Provider, streak, nil, account.LastErrorDegradeStreak, false); err != nil {
+			return missingThinkingPenaltyUnchanged, err
+		}
+		s.ApplyInvalidation(repository.InvalidationEvent{
+			Kind: repository.InvalidationAccountHealthChanged, Provider: credential.Provider, AccountID: credential.ID,
+			FailureCount: streak, HealthMarker: account.LastErrorDegradeStreak,
+		})
+		return missingThinkingPenaltyCounted, nil
+	}
 	until := now.Add(cooldown)
-	if err := s.accounts.UpdateHealth(ctx, credential.ID, credential.Provider, credential.FailureCount, &until, lastErrorMissingThinking, false); err != nil {
+	if err := s.accounts.UpdateHealth(ctx, credential.ID, credential.Provider, 0, &until, lastErrorMissingThinking, false); err != nil {
 		return missingThinkingPenaltyUnchanged, err
 	}
 	s.ApplyInvalidation(repository.InvalidationEvent{
 		Kind: repository.InvalidationAccountHealthChanged, Provider: credential.Provider, AccountID: credential.ID,
-		FailureCount: credential.FailureCount, CooldownUntil: &until, HealthMarker: account.LastErrorMissingThinking,
+		CooldownUntil: &until, HealthMarker: account.LastErrorMissingThinking,
 	})
 	s.evictCandidate(credential.Provider, credential.ID)
 	return missingThinkingPenaltyCooled, nil

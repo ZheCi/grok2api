@@ -166,8 +166,10 @@ qualityGuard:
     holdTimeout: 30s
     minOutputTokens: 8
     onExhausted: fail_closed # fail_open | fail_closed
-    # First missing-thinking hit cools the account; a later hit after the
-    # cooldown expires disables it.
+    # Consecutive quality withholds required before the account cools.
+    # 1 cools on the first withhold. A delivered success resets the streak.
+    # The next withhold after that cooldown expires disables the account.
+    degradeCooldownAfter: 1
     accountCooldown: 12h
     # Empty SSE / idle-timeout penalty. Independent of accountCooldown.
     # Single-account pools should set this lower; toggling enabled does not

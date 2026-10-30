@@ -342,6 +342,10 @@ export function clearAccountCooldown(id: string): Promise<AccountDTO> {
   return apiRequest(`/api/admin/v1/accounts/${id}/clear-cooldown`, { method: "POST" }, decodeAccount);
 }
 
+export function clearAccountsCooldown(ids: string[], provider: AccountProvider): Promise<{ cleared: number }> {
+  return apiRequest("/api/admin/v1/accounts/batch/clear-cooldown", { method: "POST", body: { ids, provider } }, decodeCountResult<{ cleared: number }>("cleared"));
+}
+
 export function acceptWebAccountTerms(id: string): Promise<{ completed: boolean }> {
   return apiRequest(`/api/admin/v1/accounts/web/${id}/accept-terms`, { method: "POST" }, decodeBooleanResult<{ completed: boolean }>("completed"));
 }

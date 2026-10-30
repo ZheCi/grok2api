@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -1859,26 +1858,56 @@ func TestAttemptLoopQualityFailOpenFallbackAndTotalAttemptCap(t *testing.T) {
 	}
 }
 
-func TestStartStreamRequestKeepaliveWritesImmediately(t *testing.T) {
-	var mu sync.Mutex
-	pings := 0
-	ctx := WithStreamKeepalive(context.Background(), func() {
-		mu.Lock()
-		pings++
-		mu.Unlock()
-	})
-	stop := startStreamRequestKeepalive(ctx)
-	stop()
-	mu.Lock()
-	defer mu.Unlock()
-	if pings != 1 {
-		t.Fatalf("pings = %d, want 1", pings)
+func TestPeekQualityStreamFailedIsNotEmpty(t *testing.T) {
+	t.Parallel()
+	replay, _, _, _, err := peekQualityStream(
+		context.Background(),
+		io.NopCloser(strings.NewReader(sse(`data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"upstream failed"}}}`))),
+		qualityProtocolResponses,
+		QualityRetryRuntime{MinOutputTokens: 8, HoldTimeout: time.Second},
+	)
+	if replay != nil {
+		defer replay.Close()
+	}
+	var failed *qualityStreamFailedError
+	if !errors.As(err, &failed) || errors.Is(err, errQualityEmptyStream) {
+		t.Fatalf("peek error = %v, want upstream stream failure", err)
+	}
+	if failed.publicMessage() != "upstream failed" {
+		t.Fatalf("message = %q", failed.publicMessage())
+	}
+
+	withText, verdict, _, _, textErr := peekQualityStream(
+		context.Background(),
+		io.NopCloser(strings.NewReader(sse(
+			`data: {"type":"response.output_text.delta","delta":"hello"}`,
+			`data: {"type":"response.failed","response":{"error":{"message":"late"}}}`,
+		))),
+		qualityProtocolResponses,
+		QualityRetryRuntime{MinOutputTokens: 8, HoldTimeout: time.Second},
+	)
+	if withText != nil {
+		defer withText.Close()
+	}
+	if textErr != nil || verdict == QualityWait {
+		t.Fatalf("visible text then failed: err=%v verdict=%s", textErr, verdict)
 	}
 }
 
-func TestStartStreamRequestKeepaliveNoopWithoutCallback(t *testing.T) {
-	stop := startStreamRequestKeepalive(context.Background())
-	stop()
+func TestObserveQualityChunkKeepsLineOverOneMegabyte(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("a", (1<<20)+32)
+	line := `data: {"type":"response.output_text.delta","delta":"` + text + "\"}\n"
+	state := qualityScanState{protocol: qualityProtocolResponses}
+	mid := 1<<20 + 10
+	ObserveQualityChunk(&state, []byte(line[:mid]))
+	if len(state.pending) == 0 {
+		t.Fatal("incomplete line over 1MB was discarded")
+	}
+	ObserveQualityChunk(&state, []byte(line[mid:]))
+	if state.visibleRunes != len(text) {
+		t.Fatalf("visible runes = %d, want %d", state.visibleRunes, len(text))
+	}
 }
 
 func TestNormalizeQualityRetryDefaults(t *testing.T) {

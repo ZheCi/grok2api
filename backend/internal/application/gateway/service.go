@@ -98,6 +98,9 @@ const nonAccountFailureFingerprintLimit = 16
 // upstream from multiplying a long idle deadline across the whole pool.
 const streamIdleFailureFingerprintLimit = 2
 
+// streamStallFingerprint counts empty streams and idle timeouts together.
+const streamStallFingerprint = "upstream_stream_stall"
+
 var freeQuotaUsagePattern = regexp.MustCompile(`(?i)tokens\s*\(actual/limit\)\s*:\s*([0-9]+)\s*/\s*([0-9]+)`)
 
 type Input struct {
@@ -1090,9 +1093,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 			firstToken.reset(started)
 		}
 		lease.markSelectorUpstreamStarted()
-		stopKeepalive := startStreamRequestKeepalive(physicalCallCtx)
 		response, err := adapter.ForwardResponse(physicalCallCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, TransientRetry: buildTransientRetryCount(credential, &transientRetryAccount, &transientRetry), IdempotencyID: idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(operation), NormalizedMetadata: normalizedMetadata})
-		stopKeepalive()
 		auditBase.ReasoningEffort = normalizedMetadata.ReasoningEffort
 		err = failureAttempts.captureResponse(credential, started, response, err)
 		timing.markUpstream(time.Since(started))
@@ -1663,6 +1664,12 @@ attemptLoop:
 						lastFailure = &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(ctx.Err(), peekErr)}
 						break
 					}
+					var streamFailed *qualityStreamFailedError
+					if errors.As(peekErr, &streamFailed) {
+						lastFailure = streamFailed.upstreamFailure(credential.ID, credential.Name)
+						s.logger.Warn("quality_peek_upstream_failed", "request_id", input.RequestID, "account_id", credential.ID)
+						break
+					}
 					lastFailure = newTransportUpstreamFailure(peekErr, credential.ID, credential.Name)
 					if neterrorpkg.IsUpstreamStreamIdleTimeout(peekErr) || neterrorpkg.IsUpstreamStreamIdleTimeout(context.Cause(ctx)) || errors.Is(peekErr, errQualityEmptyStream) {
 						logPrefix := "quality_peek_idle"
@@ -1711,7 +1718,7 @@ attemptLoop:
 							cooldown = qualityIdleAccountCooldown
 						}
 					}
-					s.applyMissingThinkingPenalty(ctx, input.RequestID, credential, cooldown, holdCfg.AutoDisable)
+					s.applyMissingThinkingPenalty(ctx, input.RequestID, credential, cooldown, holdCfg.AutoDisable, holdCfg.DegradeCooldownAfter)
 				}
 				deferFailOpenAudit := commit.Action == QualityActionRetry && holdCfg.OnExhausted == qualityRetryFailOpen
 				if commit.Audit && !deferFailOpenAudit {
@@ -2173,12 +2180,21 @@ func shouldStopForNonAccountFingerprint(fingerprints map[string]int, failure *Up
 	if failure.Fingerprint == "429:team_model_rate_limit" {
 		return false
 	}
-	fingerprints[failure.Fingerprint]++
+	key := failure.Fingerprint
 	limit := nonAccountFailureFingerprintLimit
-	if failure.Code == "upstream_stream_idle_timeout" || failure.Fingerprint == "upstream_stream_idle_timeout" || failure.Code == "upstream_stream_empty" || failure.Fingerprint == "upstream_stream_empty" {
+	if isStreamStall(failure) {
+		key = streamStallFingerprint
 		limit = streamIdleFailureFingerprintLimit
 	}
-	return fingerprints[failure.Fingerprint] >= limit
+	fingerprints[key]++
+	return fingerprints[key] >= limit
+}
+
+func isStreamStall(failure *UpstreamFailure) bool {
+	if failure == nil {
+		return false
+	}
+	return failure.Code == "upstream_stream_idle_timeout" || failure.Fingerprint == "upstream_stream_idle_timeout" || failure.Code == "upstream_stream_empty" || failure.Fingerprint == "upstream_stream_empty"
 }
 
 func isRetryable(status int) bool {
@@ -2218,9 +2234,11 @@ func recordBuildTransientRetry(credential accountdomain.Credential, bound uint64
 }
 
 func isBuildTransientRetryError(err error) bool {
+	var streamFailed *qualityStreamFailedError
 	return err != nil &&
 		!neterrorpkg.IsUpstreamResponseEmpty(err) &&
-		!errors.Is(err, errQualityEmptyStream)
+		!errors.Is(err, errQualityEmptyStream) &&
+		!errors.As(err, &streamFailed)
 }
 
 func isReasoningRecoveryFailedResponse(response *provider.Response, upstreamProvider accountdomain.Provider) bool {

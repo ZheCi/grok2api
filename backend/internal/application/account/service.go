@@ -2374,6 +2374,27 @@ func (s *Service) ClearCooldown(ctx context.Context, id uint64) (View, error) {
 	return s.Get(ctx, id)
 }
 
+// ClearCooldowns applies ClearCooldown to every selected account in one pool.
+func (s *Service) ClearCooldowns(ctx context.Context, providerValue accountdomain.Provider, ids []uint64) (int, error) {
+	ok, err := s.AccountsBelongToProvider(ctx, ids, providerValue)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, ErrAccountPoolMismatch
+	}
+	ids, err = normalizeBatchIDs(ids)
+	if err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		if _, err := s.ClearCooldown(ctx, id); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), nil
+}
+
 // MarkBuildAPIFallback 幂等写入 Build 账号 XAI 推理回退标记；失败不吞掉，调用方可重试。
 func (s *Service) MarkBuildAPIFallback(ctx context.Context, id uint64, enabled bool) error {
 	return mapRepositoryError(s.accounts.MarkBuildAPIFallback(ctx, id, enabled))

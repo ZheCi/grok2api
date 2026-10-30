@@ -50,6 +50,50 @@ var (
 	errQualityEmptyStream = errors.New("上游流式响应为空")
 )
 
+// qualityStreamFailedError is an upstream response.failed event with no
+// deliverable output. It is not an empty stream: the account stays eligible
+// and the request stops instead of rotating.
+type qualityStreamFailedError struct {
+	payload []byte
+}
+
+func (e *qualityStreamFailedError) Error() string { return "上游流式响应失败" }
+
+func (e *qualityStreamFailedError) upstreamFailure(accountID uint64, accountName string) *UpstreamFailure {
+	return &UpstreamFailure{
+		HTTPStatus: http.StatusBadGateway, Code: "upstream_stream_failed", PublicMessage: e.publicMessage(),
+		AccountID: accountID, AccountName: accountName, Fingerprint: "upstream_stream_failed", Cause: e,
+	}
+}
+
+func (e *qualityStreamFailedError) publicMessage() string {
+	const fallback = "上游流式响应失败"
+	if e == nil || len(e.payload) == 0 {
+		return fallback
+	}
+	var event struct {
+		Response struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"response"`
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(e.payload, &event) != nil {
+		return fallback
+	}
+	message := strings.TrimSpace(event.Response.Error.Message)
+	if message == "" {
+		message = strings.TrimSpace(event.Error.Message)
+	}
+	if message == "" || len(message) > 180 {
+		return fallback
+	}
+	return message
+}
+
 // QualityRetryRuntime is the isolated request-path withhold/retry policy.
 // Zero Enabled leaves production behavior unchanged.
 type QualityRetryRuntime struct {
@@ -59,6 +103,9 @@ type QualityRetryRuntime struct {
 	MinOutputTokens int64
 	OnExhausted     string
 	AccountCooldown time.Duration
+	// DegradeCooldownAfter is how many consecutive withholds cool the account.
+	// Values below 2 cool on the first withhold. A delivered success resets the streak.
+	DegradeCooldownAfter int
 	// IdleAccountCooldown is applied to truly empty upstream streams
 	// (idle timeout / empty peek). Missing-thinking still uses AccountCooldown.
 	IdleAccountCooldown             time.Duration
@@ -587,10 +634,10 @@ func jsonStringEquals(raw json.RawMessage, want string) bool {
 	return json.Unmarshal(raw, &value) == nil && strings.EqualFold(strings.TrimSpace(value), want)
 }
 
-func (s *Service) applyMissingThinkingPenalty(ctx context.Context, requestID string, credential accountdomain.Credential, cooldown time.Duration, autoDisable bool) {
+func (s *Service) applyMissingThinkingPenalty(ctx context.Context, requestID string, credential accountdomain.Credential, cooldown time.Duration, autoDisable bool, degradeCooldownAfter int) {
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalizationTimeout)
 	defer cancel()
-	action, err := s.selector.markMissingThinking(writeCtx, credential, cooldown, autoDisable)
+	action, err := s.selector.markMissingThinking(writeCtx, credential, cooldown, autoDisable, degradeCooldownAfter)
 	if err != nil {
 		s.logger.Error("quality_degraded_penalty_failed", "request_id", requestID, "account_id", credential.ID, "action", action, "error", err)
 		return
@@ -598,6 +645,8 @@ func (s *Service) applyMissingThinkingPenalty(ctx context.Context, requestID str
 	switch action {
 	case missingThinkingPenaltyDisabled:
 		s.logger.Info("quality_degraded_disabled", "request_id", requestID, "account_id", credential.ID)
+	case missingThinkingPenaltyCounted:
+		s.logger.Info("quality_degraded_streak", "request_id", requestID, "account_id", credential.ID, "cooldown_after", degradeCooldownAfter)
 	case missingThinkingPenaltyCooled:
 		s.logger.Info("quality_degraded_cooldown", "request_id", requestID, "account_id", credential.ID, "cooldown", cooldown.String())
 	}

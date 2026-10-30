@@ -159,6 +159,7 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/accounts/batch/reset-quota", h.batchResetQuota)
 	router.POST("/accounts/batch/refresh-quotas", h.batchRefreshQuotas)
 	router.POST("/accounts/batch/refresh-tokens", h.batchRefreshTokens)
+	router.POST("/accounts/batch/clear-cooldown", h.batchClearCooldown)
 	router.POST("/accounts/detect", h.detectBuildAccounts)
 	router.PATCH("/accounts/batch", h.batchUpdate)
 	router.POST("/accounts/deletion-preview", h.previewDeletion)
@@ -480,6 +481,28 @@ func (h *Handler) summary(c *gin.Context) {
 		"recovery": gin.H{"cooldown": value.Recovery.Cooldown, "waitingReset": value.Recovery.WaitingReset, "probing": value.Recovery.Probing},
 		"issues":   gin.H{"disabled": value.Issues.Disabled, "reauthRequired": value.Issues.ReauthRequired},
 	})
+}
+
+func (h *Handler) batchClearCooldown(c *gin.Context) {
+	var request struct {
+		IDs      []string `json:"ids" binding:"required"`
+		Provider string   `json:"provider" binding:"required"`
+	}
+	if c.ShouldBindJSON(&request) != nil {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
+		return
+	}
+	ids, err := parseIDs(request.IDs)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
+		return
+	}
+	cleared, err := h.service.ClearCooldowns(c.Request.Context(), accountdomain.Provider(request.Provider), ids)
+	if err != nil {
+		h.writeServiceError(c, "accountBatchClearCooldownFailed", err, http.StatusInternalServerError, "批量解除冷却失败")
+		return
+	}
+	response.Success(c, http.StatusOK, gin.H{"cleared": cleared})
 }
 
 func (h *Handler) batchUpdate(c *gin.Context) {

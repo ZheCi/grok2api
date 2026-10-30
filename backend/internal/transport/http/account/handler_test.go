@@ -315,6 +315,65 @@ func TestClearCooldownResetsHealthAndSelectorCache(t *testing.T) {
 	}
 }
 
+func TestBatchClearCooldownResetsSelectedAccounts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "batch-clear-cooldown.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := relational.NewAccountRepository(database)
+	until := time.Now().UTC().Add(time.Hour)
+	create := func(name, source string) accountdomain.Credential {
+		t.Helper()
+		created, _, err := repo.UpsertByIdentity(ctx, accountdomain.Credential{
+			Provider: accountdomain.ProviderBuild, Name: name, SourceKey: source,
+			EncryptedAccessToken: "token", Enabled: true, AuthStatus: accountdomain.AuthStatusActive,
+			Priority: 100, MaxConcurrent: 1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return created
+	}
+	thinking := create("thinking", "batch-cool-thinking")
+	transport := create("transport", "batch-cool-transport")
+	if err := repo.UpdateHealth(ctx, thinking.ID, thinking.Provider, 2, &until, accountdomain.LastErrorMissingThinking, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateHealth(ctx, transport.ID, transport.Provider, 4, &until, "upstream status 504", false); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(accountapp.NewService(repo, relational.NewAuditRepository(database), nil, nil, nil, nil, nil), nil)
+	recorder := httptest.NewRecorder()
+	ginContext, _ := gin.CreateTestContext(recorder)
+	body := fmt.Sprintf(`{"provider":"grok_build","ids":["%d","%d"]}`, thinking.ID, transport.ID)
+	ginContext.Request = httptest.NewRequest("POST", "/api/admin/v1/accounts/batch/clear-cooldown", strings.NewReader(body))
+	ginContext.Request.Header.Set("Content-Type", "application/json")
+	handler.batchClearCooldown(ginContext)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"cleared":2`) {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	storedThinking, err := repo.Get(ctx, thinking.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedThinking.FailureCount != 0 || storedThinking.CooldownUntil != nil || storedThinking.LastError != accountdomain.LastErrorMissingThinking {
+		t.Fatalf("thinking health = failure=%d cooldown=%v last=%q", storedThinking.FailureCount, storedThinking.CooldownUntil, storedThinking.LastError)
+	}
+	storedTransport, err := repo.Get(ctx, transport.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedTransport.FailureCount != 0 || storedTransport.CooldownUntil != nil || storedTransport.LastError != "" {
+		t.Fatalf("transport health = failure=%d cooldown=%v last=%q", storedTransport.FailureCount, storedTransport.CooldownUntil, storedTransport.LastError)
+	}
+}
+
 func TestUpdateCooldownWarningRequiresEnabledChange(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()

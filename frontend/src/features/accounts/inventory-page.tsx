@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, MoreHorizontal, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -36,6 +36,7 @@ import { AccountCallStatusDialog } from "@/shared/components/account-call-status
 import { getAccountCallStatus, uniqueAccountIds } from "@/shared/components/account-call-status/account-call-status-api";
 import { DataTableShell } from "@/shared/components/data-table-shell";
 import { PageHeader } from "@/shared/components/page-header";
+import { Pagination } from "@/shared/components/pagination";
 import { useDebouncedValue } from "@/shared/hooks/use-debounced-value";
 import { formatDateTime } from "@/shared/lib/format";
 
@@ -123,6 +124,8 @@ export function InventoryPage() {
   const queryClient = useQueryClient();
   const [groupId, setGroupId] = useState("");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const debouncedSearch = useDebouncedValue(search, 300);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [moveIds, setMoveIds] = useState<string[]>([]);
@@ -148,9 +151,10 @@ export function InventoryPage() {
   const qualityGuardQuery = useQuery({ queryKey: ["quality-guard", "policy"], queryFn: () => getQualityGuardStatus(), staleTime: 15_000 });
   const thresholds = qualityGuardCallStatusThresholds(qualityGuardQuery.data);
   const accountsQuery = useQuery({
-    queryKey: ["accounts", "inventory", activeGroup, debouncedSearch, thresholds?.softTPS, thresholds?.hardTPS, thresholds?.minGenMs, thresholds?.failClosed],
-    queryFn: () => listAccounts({ inventory: "stocked", groupId: activeGroup || undefined, search: debouncedSearch, page: 1, pageSize: 500, sortBy: "stockedAt", sortOrder: "desc", softTPS: thresholds?.softTPS, hardTPS: thresholds?.hardTPS, minGenMs: thresholds?.minGenMs, failClosed: thresholds?.failClosed }),
+    queryKey: ["accounts", "inventory", activeGroup, debouncedSearch, page, pageSize, thresholds?.softTPS, thresholds?.hardTPS, thresholds?.minGenMs, thresholds?.failClosed],
+    queryFn: () => listAccounts({ inventory: "stocked", groupId: activeGroup || undefined, search: debouncedSearch, page, pageSize, sortBy: "stockedAt", sortOrder: "desc", softTPS: thresholds?.softTPS, hardTPS: thresholds?.hardTPS, minGenMs: thresholds?.minGenMs, failClosed: thresholds?.failClosed }),
     enabled: groupsQuery.isSuccess,
+    placeholderData: keepPreviousData,
   });
   const items = accountsQuery.data?.items ?? [];
   const activeGroupRecord = groups.find((group) => group.id === activeGroup);
@@ -169,7 +173,7 @@ export function InventoryPage() {
   const job = qualityQuery.data?.job ?? emptyJob;
   const selectedAccounts = items.filter((account) => selected.has(account.id));
 
-  useEffect(() => { setSelected(new Set()); }, [activeGroup]);
+  useEffect(() => { setSelected(new Set()); }, [activeGroup, debouncedSearch, page, pageSize]);
   const sawQualityRun = useRef(false);
   useEffect(() => {
     if (job.running) {
@@ -330,7 +334,7 @@ export function InventoryPage() {
     <div className="space-y-4">
       <PageHeader title="库存" description="库存中的账号不参与调度。移出后按原来的启用和冷却规则回到账号页。" actions={
         <>
-          <select className="h-9 rounded-md border bg-background px-3 text-sm" value={activeGroup} onChange={(event) => setGroupId(event.target.value)} aria-label="库存分组">
+          <select className="h-9 rounded-md border bg-background px-3 text-sm" value={activeGroup} onChange={(event) => { setGroupId(event.target.value); setPage(1); }} aria-label="库存分组">
             {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
           </select>
           <Button size="sm" variant="secondary" className="bg-destructive/10 text-destructive hover:bg-destructive/15 hover:text-destructive" disabled={!canDeleteGroup || deleteGroupMutation.isPending} title={activeGroupRecord?.name === "Default" ? "Default 分组不能删除" : undefined} onClick={() => setDeleteGroupOpen(true)}>删除分组</Button>
@@ -340,7 +344,7 @@ export function InventoryPage() {
         <div className="flex w-full flex-wrap items-center gap-2">
           <div className="relative min-w-0 flex-1 sm:w-64 sm:flex-none">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input className="h-8 pl-9 text-xs" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("accounts.search")} aria-label={t("accounts.search")} />
+            <Input className="h-8 pl-9 text-xs" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder={t("accounts.search")} aria-label={t("accounts.search")} />
           </div>
           <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
             {selected.size > 0 ? <span className="mr-1 text-xs text-muted-foreground">已选 {selected.size}</span> : null}
@@ -352,7 +356,7 @@ export function InventoryPage() {
             {job.total > 0 ? <Button size="sm" variant="secondary" onClick={() => setQualityOpen(true)}>降智测试进度 {job.done}/{job.total}</Button> : null}
           </div>
         </div>
-      )}>
+      )} footer={accountsQuery.data && accountsQuery.data.total > 0 ? <Pagination page={accountsQuery.data.page} pageSize={accountsQuery.data.pageSize} total={accountsQuery.data.total} onPageChange={setPage} onPageSizeChange={(value) => { setPageSize(value); setPage(1); }} /> : undefined}>
       <Table className="table-fixed min-w-[1080px]">
         <TableHeader>
           <TableRow className="hover:bg-transparent">
@@ -408,7 +412,6 @@ export function InventoryPage() {
         </TableBody>
       </Table>
       </DataTableShell>
-      {(accountsQuery.data?.total ?? 0) > items.length ? <p className="text-sm text-muted-foreground">当前显示 {items.length} 条，这个分组共 {accountsQuery.data?.total} 条。</p> : null}
       <InventoryMoveDialog mode="unstock" ids={moveIds} open={moveOpen} onOpenChange={setMoveOpen} />
       <Dialog open={unstockAllOpen} onOpenChange={(open) => { if (!unstockMutation.isPending) setUnstockAllOpen(open); }}>
         <DialogContent className="max-w-[440px]">
